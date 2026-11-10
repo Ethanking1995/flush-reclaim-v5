@@ -1341,7 +1341,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                     f"at {c_time} EST; trigger @ ${entry_p:.2f} on higher-low green 5m reclaim bar."
                 )
 
-            tot_shares = int(clip_dollars // entry_p)
+            tot_shares = min(int(clip_dollars // entry_p), 3000)
             leg1_shares = tot_shares // 2
             leg2_shares = tot_shares - leg1_shares
 
@@ -1411,13 +1411,20 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                 )
 
 
-def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0):
+def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0, dynamic_mode=False):
+    if dynamic_mode:
+        from universe_scanner import get_or_refresh_dynamic_universe
+        tickers_list = get_or_refresh_dynamic_universe(core_tickers=['FISV', 'PLNT', 'EEFT'], verbose=True)
+
     if not watch_mode:
         render_trader_hud(tickers_list, clip_dollars=clip_dollars, clear_screen=False)
         return
     try:
         while True:
             try:
+                if dynamic_mode:
+                    from universe_scanner import get_or_refresh_dynamic_universe
+                    tickers_list = get_or_refresh_dynamic_universe(core_tickers=['FISV', 'PLNT', 'EEFT'], verbose=False)
                 render_trader_hud(tickers_list, clip_dollars=clip_dollars, clear_screen=True)
             except KeyboardInterrupt:
                 raise
@@ -1437,7 +1444,12 @@ if __name__ == '__main__':
             clip_size = float(sys.argv[idx + 1])
 
     if '--live' in sys.argv or '--watch' in sys.argv:
-        run_live_scanner(hud_tickers, watch_mode=('--watch' in sys.argv), clip_dollars=clip_size)
+        run_live_scanner(
+            hud_tickers,
+            watch_mode=('--watch' in sys.argv),
+            clip_dollars=clip_size,
+            dynamic_mode=('--dynamic' in sys.argv),
+        )
         sys.exit(0)
 
     data_5m = {t: yf.Ticker(t).history(period='60d', interval='5m') for t in all_tickers}

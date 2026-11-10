@@ -1,0 +1,125 @@
+{
+  "generated_at_est": "2026-11-09 23:46:53 EST",
+  "session_date": "2026-11-09",
+  "expires_on_date": "2026-11-10",
+  "core_verified_tickers": [
+    "FISV",
+    "PLNT",
+    "EEFT"
+  ],
+  "top_dynamic_tickers": [
+    "VIAV",
+    "CHTR",
+    "MGM",
+    "MOS",
+    "FISV",
+    "RDDT"
+  ],
+  "merged_hud_universe": [
+    "FISV",
+    "PLNT",
+    "EEFT",
+    "VIAV",
+    "CHTR",
+    "MGM",
+    "MOS",
+    "RDDT"
+  ],
+  "top_candidates": [
+    {
+      "Ticker": "VIAV",
+      "Company": "Viavi Solutions Inc.",
+      "Sector": "Technology",
+      "Industry": "Communication Equipment",
+      "Price": 31.98,
+      "20d ADTV": 6906700,
+      "MedDollarVol": 182607498.0,
+      "60d DD%": -50.27,
+      "5d Vol Accum%": 74.0,
+      "Next ER Date": "2027-02-04",
+      "Score": 307.15
+    },
+    {
+      "Ticker": "CHTR",
+      "Company": "Charter Communications, Inc.",
+      "Sector": "Communication Services",
+      "Industry": "Telecom Services",
+      "Price": 121.2,
+      "20d ADTV": 2892470,
+      "MedDollarVol": 280609311.0,
+      "60d DD%": -37.08,
+      "5d Vol Accum%": 90.5,
+      "Next ER Date": "2027-01-29",
+      "Score": 283.54
+    },
+    {
+      "Ticker": "MGM",
+      "Company": "MGM Resorts International",
+      "Sector": "Consumer Cyclical",
+      "Industry": "Resorts & Casinos",
+      "Price": 32.91,
+      "20d ADTV": 6074845,
+      "MedDollarVol": 159325455.0,
+      "60d DD%": -39.72,
+      "5d Vol Accum%": 82.4,
+      "Next ER Date": "2027-02-10",
+      "Score": 268.59
+    },
+    {
+      "Ticker": "MOS",
+      "Company": "Mosaic Company (The)",
+      "Sector": "Basic Materials",
+      "Industry": "Agricultural Inputs",
+      "Price": 22.77,
+      "20d ADTV": 11387600,
+      "MedDollarVol": 198100875.0,
+      "60d DD%": -36.45,
+      "5d Vol Accum%": 88.4,
+      "Next ER Date": "2027-02-24",
+      "Score": 267.18
+    },
+    {
+      "Ticker": "FISV",
+      "Company": "Fiserv, Inc.",
+      "Sector": "Commercial Services",
+      "Industry": "Miscellaneous Commercial Ser",
+      "Price": 63.52,
+      "20d ADTV": 7510790,
+      "MedDollarVol": 257336296.0,
+      "60d DD%": -31.52,
+      "5d Vol Accum%": 100.0,
+      "Next ER Date": "2027-02-09",
+      "Score": 265.08
+    },
+    {
+      "Ticker": "RDDT",
+      "Company": "Reddit, Inc.",
+      "Sector": "Communication Services",
+      "Industry": "Internet Content & Informati",
+      "Price": 100.79,
+      "20d ADTV": 7548180,
+      "MedDollarVol": 636740718.0,
+      "60d DD%": -49.94,
+      "5d Vol Accum%": 60.2,
+      "Next ER Date": "2027-02-17",
+      "Score": 264.54
+    }
+  ],
+  "total_scanned": 535,
+  "total_survivors": 155,
+  "rejection_summary": {
+    "MODULE_2_ZOMBIE_CASH_BURNER": 15,
+    "MODULE_3_WEAK_5D_ACCUMULATION": 78,
+    "MODULE_2_NO_CONFIRMED_BASE": 129,
+    "MODULE_2_FOREIGN_OR_ADR_BLACKLIST": 42,
+    "MODULE_2_10D_FALLING_KNIFE": 1,
+    "MODULE_3_PRE_EARNINGS_14D_BLACKOUT": 7,
+    "MODULE_2_HEALTHCARE_UNDER_20B": 27,
+    "MODULE_2_BIOTECH_BLACKLIST": 15,
+    "MODULE_3_INSUFFICIENT_DISLOCATION": 3,
+    "MODULE_1_LOW_DOLLAR_VOL": 56,
+    "MODULE_2_MCAP_BELOW_3B": 1,
+    "MODULE_1_PRICE_OUT_OF_BOUNDS": 6,
+    "MODULE_1_WIDE_BID_ASK_SPREAD": 1
+  }
+}

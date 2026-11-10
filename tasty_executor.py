@@ -277,7 +277,7 @@ def build_v5_bracket_order(
     stop_p = round(float(stop_price), 2)
     leg1_p = round(float(leg1_vwap_price), 2)
 
-    shares = int(clip_usd / limit_p)
+    shares = min(int(clip_usd / limit_p), MAX_SHARE_COUNT)
     leg1_shares = int(shares / 2)
     leg2_shares = shares - leg1_shares
 
