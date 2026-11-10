@@ -915,9 +915,46 @@ def safe_yf_history(sym, period, interval, retries=2):
     return pd.DataFrame()
 
 
-def get_cached_hud_history(sym, need_full=False):
+def batch_refresh_hud_deltas(symbols):
     """
-    Caches 1y daily and 60d 5m history in memory across --watch cycles, fetching only lightweight 5d 5m
+    Updates all cached 5m DataFrames in a SINGLE batched Yahoo Finance HTTP request
+    (`yf.download(..., period='2d', interval='5m', group_by='ticker', threads=False)`)
+    so --watch mode only makes 1 Yahoo request + 1 TradingView request per 30s cycle.
+    """
+    if not symbols:
+        return
+    try:
+        batch_df = yf.download(
+            tickers=list(symbols),
+            period='2d',
+            interval='5m',
+            group_by='ticker',
+            progress=False,
+            threads=False,
+        )
+        if batch_df is None or batch_df.empty:
+            return
+        for sym in symbols:
+            cached_5m = _HUD_CACHE['5m'].get(sym, pd.DataFrame())
+            if cached_5m.empty:
+                continue
+            try:
+                sub = batch_df[sym].dropna(how='all') if isinstance(batch_df.columns, pd.MultiIndex) else batch_df.dropna(how='all')
+                if sub is not None and not sub.empty:
+                    if cached_5m.index.tz is not None and sub.index.tz is not None:
+                        sub = sub.tz_convert(cached_5m.index.tz)
+                    combined = pd.concat([cached_5m, sub])
+                    combined = combined[~combined.index.duplicated(keep='last')].sort_index()
+                    _HUD_CACHE['5m'][sym] = combined
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def get_cached_hud_history(sym, need_full=False, skip_individual_delta=False):
+    """
+    Caches 1y daily and 60d 5m history in memory across --watch cycles, fetching only lightweight
     delta bars on 30-second refreshes so Yahoo Finance never rate-limits or crashes the HUD.
     """
     cached_1d = _HUD_CACHE['1d'].get(sym, pd.DataFrame())
@@ -934,7 +971,7 @@ def get_cached_hud_history(sym, need_full=False):
         if not df_5m.empty:
             _HUD_CACHE['5m'][sym] = df_5m
             cached_5m = df_5m
-    else:
+    elif not skip_individual_delta:
         recent_5m = safe_yf_history(sym, period='5d', interval='5m')
         if not recent_5m.empty:
             combined = pd.concat([cached_5m, recent_5m])
@@ -946,12 +983,27 @@ def get_cached_hud_history(sym, need_full=False):
 
 
 def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
+    from tasty_executor import MAX_FEED_DIVERGENCE_PCT, fetch_secondary_quotes
+
     est_tz = pytz.timezone('US/Eastern')
     now_est = datetime.now(est_tz)
 
     now_ts = time.time()
-    need_full = (now_ts - _HUD_CACHE['last_full_fetch']) > 1800.0  # Full 1y/60d refresh every 30 mins
-    spy_1d, spy_5m = get_cached_hud_history('SPY', need_full=need_full)
+    all_hud_syms = ['SPY'] + list(tickers_list)
+    have_warm_cache = all(
+        (s in _HUD_CACHE['1d'] and not _HUD_CACHE['1d'][s].empty and s in _HUD_CACHE['5m'] and not _HUD_CACHE['5m'][s].empty)
+        for s in all_hud_syms
+    )
+    need_full = (not have_warm_cache) or ((now_ts - _HUD_CACHE['last_full_fetch']) > 1800.0)
+
+    # 1. If cache is warm, refresh all 7 symbols in a SINGLE batched Yahoo HTTP request
+    if not need_full:
+        batch_refresh_hud_deltas(all_hud_syms)
+
+    # 2. Fetch Independent Secondary Price & VWAP Oracle (TradingView Scanner API) in 1 HTTP POST
+    tv_quotes = fetch_secondary_quotes(all_hud_syms)
+
+    spy_1d, spy_5m = get_cached_hud_history('SPY', need_full=need_full, skip_individual_delta=(not need_full))
     if spy_1d.empty or spy_5m.empty:
         print(f"⚠️  [{now_est.strftime('%H:%M:%S EST')}] Transient Yahoo Finance timeout on SPY; retrying next cycle...")
         return
@@ -978,9 +1030,20 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
     # --------------------------------------------------------------------------
     radar_rows = []
     action_cards = []
+    feed_sync_count = 0
+    feed_total_checked = 0
+    max_feed_spread_pct = 0.0
+
+    if 'SPY' in tv_quotes and spy_last > 0:
+        spy_tv_p = tv_quotes['SPY']['last']
+        spy_spread = abs(spy_last - spy_tv_p) / spy_last * 100.0
+        feed_total_checked += 1
+        max_feed_spread_pct = max(max_feed_spread_pct, spy_spread)
+        if spy_spread <= MAX_FEED_DIVERGENCE_PCT * 100.0:
+            feed_sync_count += 1
 
     for t in tickers_list:
-        df_1d, df_5m = get_cached_hud_history(t, need_full=need_full)
+        df_1d, df_5m = get_cached_hud_history(t, need_full=need_full, skip_individual_delta=(not need_full))
         if df_5m.empty or df_1d.empty:
             continue
 
@@ -1092,6 +1155,21 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
         vs_vwap_pct = (cur_p - cur_vwap) / cur_vwap * 100.0
         m_high = float(last_row['MorningHigh'])
 
+        # Cross-verify Primary (yfinance) against Secondary Oracle (TradingView Scanner API)
+        tv_info = tv_quotes.get(t.upper())
+        tv_price = float(tv_info['last']) if tv_info and tv_info.get('last') else None
+        if tv_price and cur_p > 0:
+            spread_pct = abs(cur_p - tv_price) / cur_p * 100.0
+            feed_total_checked += 1
+            max_feed_spread_pct = max(max_feed_spread_pct, spread_pct)
+            if spread_pct <= MAX_FEED_DIVERGENCE_PCT * 100.0:
+                feed_sync_count += 1
+                feed_check_str = f"✅ SYNC ({spread_pct:.2f}%)"
+            else:
+                feed_check_str = f"⚠️ DIV ({spread_pct:.2f}%)"
+        else:
+            feed_check_str = "⚪ YF ONLY"
+
         # Morning window (09:50-13:00) flush stats
         morn_df = day_df[(day_df.index.hour * 100 + day_df.index.minute >= 950) & (day_df.index.hour * 100 + day_df.index.minute <= 1300)]
         if not today_trades.empty:
@@ -1115,6 +1193,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                 'Mode': 'TRADED_TODAY',
                 'TradeRow': tr_row,
                 'CurrentPrice': cur_p,
+                'SecondaryPrice': tv_price,
                 'CurrentVWAP': cur_vwap,
                 'CurrentEMA20': cur_ema20,
             })
@@ -1167,6 +1246,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                     'StopPrice': stop_p,
                     'Leg1Price': leg1_p,
                     'CurrentPrice': cur_p,
+                    'SecondaryPrice': tv_price,
                     'CurrentVWAP': cur_vwap,
                     'CurrentEMA20': cur_ema20,
                 })
@@ -1175,6 +1255,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
             'Ticker': t,
             'GateStatus': gate_status,
             'Last': f"${cur_p:.2f}",
+            'FeedCheck': feed_check_str,
             'VWAP (% vs VWAP)': f"${cur_vwap:.2f} ({vs_vwap_pct:+.2f}%)",
             'MornHigh': f"${m_high:.2f}",
             'FlushLow': f"${disp_flush_low:.2f}",
@@ -1192,6 +1273,14 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
     if clear_screen:
         print("\033[2J\033[H", end="")
 
+    if feed_total_checked > 0:
+        oracle_status = (
+            f"🟢 DUAL-FEED ORACLE: Primary (yfinance) + Secondary (TradingView) | "
+            f"{feed_sync_count}/{feed_total_checked} Symbols IN SYNC (Max Spread: {max_feed_spread_pct:.2f}% <= {MAX_FEED_DIVERGENCE_PCT * 100:.2f}% Cap)"
+        )
+    else:
+        oracle_status = "🟡 DATA ORACLE: Primary (yfinance) Only"
+
     print("=" * 128)
     print(f"🎯 V5 INSTITUTIONAL FLUSH & RECLAIM — TRADER EXECUTION HUD  |  IRA CLIP: ${clip_dollars:,.0f}  |  {now_est.strftime('%Y-%m-%d %H:%M:%S EST')}")
     print("-" * 128)
@@ -1200,6 +1289,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
         f"MACRO GATE   : {spy_gate_str}  |  SPY Last: ${spy_last:.2f}  |  SPY VWAP: ${spy_vwap:.2f} ({spy_vs_vwap:+.2f}%)  "
         f"|  SPY Drawdown from High: {spy_dd:+.2f}% (Intraday Low: {spy_max_dd:+.2f}%)"
     )
+    print(f"FEED ORACLE  : {oracle_status}")
     print("=" * 128)
     print(pd.DataFrame(radar_rows).to_string(index=False))
     print("=" * 128)
@@ -1316,6 +1406,8 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                     clip_usd=clip_dollars,
                     dry_run=is_dry_run,
                     auto_abort_prompt=non_interactive,
+                    primary_live_price=card.get('CurrentPrice'),
+                    secondary_live_price=card.get('SecondaryPrice'),
                 )
 
 

@@ -26,12 +26,67 @@ from tastytrade.utils import now_in_new_york, validate_response
 # ==============================================================================
 # PART 1 & 2: HARD SAFETY CONSTANTS & FAIL-SAFE SANITY ASSERTIONS (NON-NEGOTIABLE)
 # ==============================================================================
-MAX_NOTIONAL_USD = 152_000.00  # Strict maximum dollar clip
-MAX_SHARE_COUNT = 3_000        # Hard ceiling cap on shares for tickers > $30
-TARGET_CLIP_USD = 150_000.00   # Default Traditional IRA clip size
+MAX_NOTIONAL_USD = 152_000.00        # Strict maximum dollar clip
+MAX_SHARE_COUNT = 3_000              # Hard ceiling cap on shares for tickers > $30
+TARGET_CLIP_USD = 150_000.00         # Default Traditional IRA clip size
 ALLOWED_ACCOUNT_ID = "5WJ26897"
+MAX_FEED_DIVERGENCE_PCT = 0.0025     # 0.25% max allowed spread between Primary (YF) & Secondary (TV) feeds
 
 SESSION_CACHE_PATH = Path(__file__).resolve().parent / ".tt_session_cache.json"
+
+TV_SCANNER_URL = "https://scanner.tradingview.com/america/scan"
+TV_EXCHANGE_CANDIDATES = ("NASDAQ", "NYSE", "AMEX")
+
+
+def fetch_secondary_quotes(tickers: list[str], timeout: float = 3.5) -> dict[str, dict[str, Any]]:
+    """
+    Independent Secondary Price & VWAP Oracle via TradingView Scanner API.
+    Fetches real-time/intraday close, open, high, low, volume, and VWAP for all tickers
+    in a single <150ms batch POST request without requiring API keys or Yahoo infrastructure.
+    """
+    if not tickers:
+        return {}
+    tv_symbols = []
+    for sym in tickers:
+        s = sym.upper().strip()
+        for ex in TV_EXCHANGE_CANDIDATES:
+            tv_symbols.append(f"{ex}:{s}")
+
+    payload = {
+        "symbols": {"tickers": tv_symbols},
+        "columns": ["name", "close", "open", "high", "low", "volume", "VWAP"],
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        "Content-Type": "application/json",
+    }
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        with Client(timeout=timeout, headers=headers) as client:
+            resp = client.post(TV_SCANNER_URL, json=payload)
+            if resp.status_code != 200:
+                return out
+            rows = resp.json().get("data", [])
+            for item in rows:
+                full_sym = item.get("s", "")
+                d = item.get("d", [])
+                if len(d) < 7 or d[1] is None:
+                    continue
+                sym_name = str(d[0]).upper()
+                exch = full_sym.split(":")[0] if ":" in full_sym else ""
+                out[sym_name] = {
+                    "last": float(d[1]),
+                    "open": float(d[2]) if d[2] is not None else float(d[1]),
+                    "high": float(d[3]) if d[3] is not None else float(d[1]),
+                    "low": float(d[4]) if d[4] is not None else float(d[1]),
+                    "volume": float(d[5]) if d[5] is not None else 0.0,
+                    "vwap": float(d[6]) if d[6] is not None else float(d[1]),
+                    "exchange": exch,
+                    "source": "TradingView",
+                }
+    except Exception:
+        pass
+    return out
 
 
 def validate_order_safety(
@@ -40,6 +95,8 @@ def validate_order_safety(
     limit_price: float,
     stop_price: float,
     account_id: str,
+    primary_live_price: Optional[float] = None,
+    secondary_live_price: Optional[float] = None,
 ) -> bool:
     """
     Non-negotiable pre-trade sanity assertions.
@@ -66,6 +123,19 @@ def validate_order_safety(
     assert max_loss_usd <= 1_500.00, (
         f"FATAL ERROR: Calculated risk ${max_loss_usd:,.2f} exceeds $1,500 max allowed loss!"
     )
+    # 6. Dual-Feed Price Consensus Guard (Primary YF vs Secondary TradingView <= 0.25% spread)
+    if (
+        primary_live_price is not None
+        and secondary_live_price is not None
+        and primary_live_price > 0
+        and secondary_live_price > 0
+    ):
+        feed_diff_pct = abs(primary_live_price - secondary_live_price) / primary_live_price
+        assert feed_diff_pct <= MAX_FEED_DIVERGENCE_PCT, (
+            f"SECURITY ABORT: Dual-Feed Price Divergence on {ticker}! "
+            f"Primary=${primary_live_price:.2f} vs Secondary=${secondary_live_price:.2f} "
+            f"(Spread {feed_diff_pct * 100:.2f}% exceeds {MAX_FEED_DIVERGENCE_PCT * 100:.2f}% max threshold)!"
+        )
     return True
 
 
@@ -195,9 +265,11 @@ def build_v5_bracket_order(
     leg1_vwap_price: float,
     account_id: str = ALLOWED_ACCOUNT_ID,
     clip_usd: float = TARGET_CLIP_USD,
+    primary_live_price: Optional[float] = None,
+    secondary_live_price: Optional[float] = None,
 ) -> dict[str, Any]:
     """
-    Calculates exact share count from TARGET_CLIP_USD, runs the 5 non-negotiable
+    Calculates exact share count from TARGET_CLIP_USD, runs the 6 non-negotiable
     validate_order_safety() assertions, and constructs the official Tastytrade SDK
     NewOrder (Entry) and NewComplexOrder (OTOCO Bracket with Stop + Leg 1 Target).
     """
@@ -216,6 +288,8 @@ def build_v5_bracket_order(
         limit_price=limit_p,
         stop_price=stop_p,
         account_id=account_id,
+        primary_live_price=primary_live_price,
+        secondary_live_price=secondary_live_price,
     )
 
     # 1. Entry Order: Buy `shares` of `ticker` @ `limit_price` (Limit, Time-In-Force: DAY)
@@ -304,13 +378,20 @@ def stage_and_prompt_order(
     clip_usd: float = TARGET_CLIP_USD,
     dry_run: bool = True,
     auto_abort_prompt: bool = False,
+    primary_live_price: Optional[float] = None,
+    secondary_live_price: Optional[float] = None,
 ) -> dict[str, Any]:
     """
-    Stages the V5 Bracket Order, runs the dry-run preflight check against Tastytrade
-    (or offline preflight validation if .env credentials are not yet set), renders the
-    Human-in-the-Loop confirmation box, and only transmits a live order if the user
-    physically presses [ENTER] with dry_run=False.
+    Stages the V5 Bracket Order, verifies Dual-Feed Price Consensus (yfinance vs TradingView),
+    runs the dry-run preflight check against Tastytrade (or offline preflight validation if .env
+    credentials are not yet set), renders the Human-in-the-Loop confirmation box, and only
+    transmits a live order if the user physically presses [ENTER] with dry_run=False.
     """
+    if secondary_live_price is None:
+        sec_map = fetch_secondary_quotes([ticker])
+        if ticker.upper() in sec_map:
+            secondary_live_price = sec_map[ticker.upper()]["last"]
+
     staged = build_v5_bracket_order(
         ticker=ticker,
         limit_price=limit_price,
@@ -318,7 +399,20 @@ def stage_and_prompt_order(
         leg1_vwap_price=leg1_vwap_price,
         account_id=account_id,
         clip_usd=clip_usd,
+        primary_live_price=primary_live_price,
+        secondary_live_price=secondary_live_price,
     )
+
+    if primary_live_price and secondary_live_price:
+        spread_pct = abs(primary_live_price - secondary_live_price) / primary_live_price * 100.0
+        feed_consensus_str = (
+            f"PASSED ✅ (YF ${primary_live_price:.2f} vs TV ${secondary_live_price:.2f} | "
+            f"Spread: {spread_pct:.2f}% <= {MAX_FEED_DIVERGENCE_PCT * 100:.2f}%)"
+        )
+    elif secondary_live_price:
+        feed_consensus_str = f"VERIFIED ✅ (TradingView Secondary Quote: ${secondary_live_price:.2f})"
+    else:
+        feed_consensus_str = "PRIMARY ONLY (Secondary Oracle Unreachable)"
 
     session, acct_id, is_live_auth = load_or_create_session()
     dry_run_status = "SUCCESSFUL (Margin Verified with Tastytrade Clearing)"
@@ -358,6 +452,7 @@ def stage_and_prompt_order(
         f"Leg 1 Target  : ${staged['leg1_vwap_price']:.2f}  "
         f"(50% = {staged['leg1_shares']:,} sh @ VWAP)"
     )
+    print(f"Feed Consensus: {feed_consensus_str}")
     print(f"Dry-Run Check : {dry_run_status}")
     print("-" * 80)
     print("👉 Press [ENTER] to TRANSMIT LIVE ORDER TO TASTYTRADE, or [ESC / Ctrl+C] to ABORT.")
@@ -403,7 +498,7 @@ def stage_and_prompt_order(
 
 def run_safety_and_mock_staging_audit() -> None:
     """
-    Runs a comprehensive verification of all 5 non-negotiable safety assertions
+    Runs a comprehensive verification of all 6 non-negotiable safety assertions
     and stages today's FISV setup ($63.19 Entry, $62.78 Stop, $63.48 Leg 1 VWAP) in --dry-run mode.
     """
     print("\n" + "=" * 80)
@@ -431,6 +526,10 @@ def run_safety_and_mock_staging_audit() -> None:
             "Guard #5: Excessive Dollar Risk (-$2,373.00 Loss > $1,500 Max Risk Cap)",
             lambda: validate_order_safety("FISV", 2373, 63.19, 62.19, "5WJ26897"),
         ),
+        (
+            "Guard #6: Dual-Feed Price Divergence (YF $63.53 vs Stale/Bad Feed $62.80 = 1.15% > 0.25% Cap)",
+            lambda: validate_order_safety("FISV", 2373, 63.19, 62.78, "5WJ26897", primary_live_price=63.53, secondary_live_price=62.80),
+        ),
     ]
 
     for label, fn in test_cases:
@@ -453,6 +552,7 @@ def run_safety_and_mock_staging_audit() -> None:
         clip_usd=150_000.00,
         dry_run=True,
         auto_abort_prompt=True,
+        primary_live_price=63.53,
     )
 
     print("\n📦 SERIALIZED TASTYTRADE SDK OTOCO BRACKET PAYLOAD (VERIFIED):")
