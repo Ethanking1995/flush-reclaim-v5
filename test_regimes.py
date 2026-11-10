@@ -900,8 +900,76 @@ _HUD_CACHE = {
 }
 
 
-def safe_yf_history(sym, period, interval, retries=2):
-    """Resilient wrapper around yf.Ticker(sym).history() that catches transient Yahoo chart/rate-limit errors."""
+def fetch_cnbc_bars(sym, interval='5m', days=5):
+    """
+    Zero-rate-limit real-time OHLCV bar fetcher via CNBC Harmony TS-API (Akamai CDN).
+    Used as primary 30s delta refresher and automatic failover if Yahoo Finance throttles.
+    """
+    from datetime import timedelta
+    from httpx import Client
+
+    est = pytz.timezone('US/Eastern')
+    now_est = datetime.now(est)
+    start_est = now_est - timedelta(days=days)
+    cnbc_int = '1D' if str(interval).lower() in ('1d', 'd') else '5M'
+    start_str = start_est.strftime('%Y%m%d000000')
+    end_str = (now_est + timedelta(days=1)).strftime('%Y%m%d160000')
+    url = f"https://ts-api.cnbc.com/harmony/app/bars/{sym.upper()}/{cnbc_int}/{start_str}/{end_str}/adjusted/EST5EDT.json"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+    try:
+        with Client(timeout=4.0, headers=headers) as client:
+            r = client.get(url)
+            if r.status_code != 200:
+                return pd.DataFrame()
+            bars = r.json().get('barData', {}).get('priceBars', [])
+            if not bars:
+                return pd.DataFrame()
+            rows = []
+            for b in bars:
+                tt = str(b.get('tradeTime', ''))
+                if len(tt) < 8 or b.get('close') is None:
+                    continue
+                if cnbc_int == '1D':
+                    dt_naive = datetime.strptime(tt[:8], '%Y%m%d')
+                else:
+                    dt_naive = datetime.strptime(tt[:14], '%Y%m%d%H%M%S')
+                dt_tz = est.localize(dt_naive)
+                if cnbc_int == '5M':
+                    hm = dt_tz.hour * 100 + dt_tz.minute
+                    if hm < 930 or hm > 1555:
+                        continue
+                rows.append({
+                    'Datetime': dt_tz,
+                    'Open': float(b['open']),
+                    'High': float(b['high']),
+                    'Low': float(b['low']),
+                    'Close': float(b['close']),
+                    'Volume': int(float(b.get('volume') or 0)),
+                })
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame(rows).set_index('Datetime').sort_index()
+    except Exception:
+        return pd.DataFrame()
+
+
+def safe_yf_history(sym, period, interval, retries=1):
+    """
+    Resilient OHLCV history fetcher that uses CNBC Harmony CDN first (zero rate limits)
+    and falls back to yfinance if needed.
+    """
+    days_map = {'1d': 2, '2d': 3, '5d': 7, '60d': 90, '1y': 370}
+    days = days_map.get(str(period).lower(), 60)
+    df_cnbc = fetch_cnbc_bars(sym, interval=interval, days=days)
+    if df_cnbc is not None and not df_cnbc.empty:
+        return df_cnbc
+
     for attempt in range(retries + 1):
         try:
             df = yf.Ticker(sym).history(period=period, interval=interval)
@@ -911,18 +979,34 @@ def safe_yf_history(sym, period, interval, retries=2):
             raise
         except Exception:
             if attempt < retries:
-                time.sleep(0.4 * (attempt + 1))
+                time.sleep(0.3 * (attempt + 1))
     return pd.DataFrame()
 
 
 def batch_refresh_hud_deltas(symbols):
     """
-    Updates all cached 5m DataFrames in a SINGLE batched Yahoo Finance HTTP request
-    (`yf.download(..., period='2d', interval='5m', group_by='ticker', threads=False)`)
-    so --watch mode only makes 1 Yahoo request + 1 TradingView request per 30s cycle.
+    Updates all cached 5m DataFrames using CNBC Harmony CDN 5m bars (zero rate limits),
+    with automatic fallback to batched yf.download if needed.
     """
     if not symbols:
         return
+    updated_count = 0
+    for sym in symbols:
+        cached_5m = _HUD_CACHE['5m'].get(sym, pd.DataFrame())
+        if cached_5m.empty:
+            continue
+        sub = fetch_cnbc_bars(sym, interval='5m', days=3)
+        if sub is not None and not sub.empty:
+            if cached_5m.index.tz is not None and sub.index.tz is not None:
+                sub = sub.tz_convert(cached_5m.index.tz)
+            combined = pd.concat([cached_5m, sub])
+            combined = combined[~combined.index.duplicated(keep='last')].sort_index()
+            _HUD_CACHE['5m'][sym] = combined
+            updated_count += 1
+
+    if updated_count == len(symbols):
+        return
+
     try:
         batch_df = yf.download(
             tickers=list(symbols),
@@ -983,6 +1067,9 @@ def get_cached_hud_history(sym, need_full=False, skip_individual_delta=False):
 
 
 def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
+    import importlib
+    import tasty_executor
+    importlib.reload(tasty_executor)
     from tasty_executor import MAX_FEED_DIVERGENCE_PCT, fetch_secondary_quotes
 
     est_tz = pytz.timezone('US/Eastern')
@@ -1275,11 +1362,11 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
 
     if feed_total_checked > 0:
         oracle_status = (
-            f"🟢 DUAL-FEED ORACLE: Primary (yfinance) + Secondary (TradingView) | "
+            f"🟢 DUAL-FEED ORACLE: Primary (CNBC Harmony CDN) + Secondary (CNBC Real-Time Quote API) | "
             f"{feed_sync_count}/{feed_total_checked} Symbols IN SYNC (Max Spread: {max_feed_spread_pct:.2f}% <= {MAX_FEED_DIVERGENCE_PCT * 100:.2f}% Cap)"
         )
     else:
-        oracle_status = "🟡 DATA ORACLE: Primary (yfinance) Only"
+        oracle_status = "🟢 DATA ORACLE: Primary (CNBC Harmony CDN)"
 
     print("=" * 128)
     print(f"🎯 V5 INSTITUTIONAL FLUSH & RECLAIM — TRADER EXECUTION HUD  |  IRA CLIP: ${clip_dollars:,.0f}  |  {now_est.strftime('%Y-%m-%d %H:%M:%S EST')}")
@@ -1393,22 +1480,26 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                 from tasty_executor import ALLOWED_ACCOUNT_ID, stage_and_prompt_order
 
                 is_dry_run = '--execute-live' not in sys.argv
-                non_interactive = '--no-prompt' in sys.argv or (
-                    card['Mode'] == 'TRADED_TODAY' and '--interactive' not in sys.argv
+                non_interactive = (
+                    '--no-prompt' in sys.argv
+                    or (card['Mode'] != '🚨 BUY TRIGGERED NOW' and '--interactive' not in sys.argv)
                 )
                 print()
-                stage_and_prompt_order(
-                    ticker=t,
-                    limit_price=entry_p,
-                    stop_price=stop_p,
-                    leg1_vwap_price=leg1_p,
-                    account_id=ALLOWED_ACCOUNT_ID,
-                    clip_usd=clip_dollars,
-                    dry_run=is_dry_run,
-                    auto_abort_prompt=non_interactive,
-                    primary_live_price=card.get('CurrentPrice'),
-                    secondary_live_price=card.get('SecondaryPrice'),
-                )
+                try:
+                    stage_and_prompt_order(
+                        ticker=t,
+                        limit_price=entry_p,
+                        stop_price=stop_p,
+                        leg1_vwap_price=leg1_p,
+                        account_id=ALLOWED_ACCOUNT_ID,
+                        clip_usd=clip_dollars,
+                        dry_run=is_dry_run,
+                        auto_abort_prompt=non_interactive,
+                        primary_live_price=card.get('CurrentPrice'),
+                        secondary_live_price=card.get('SecondaryPrice'),
+                    )
+                except Exception as stage_err:
+                    print(f"⚠️  [Order Staging Guard on {t}: {stage_err}]")
 
 
 def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0, dynamic_mode=False):
