@@ -1,0 +1,30 @@
+---
+description: How to place Flush & Reclaim signals through the Robinhood Trading MCP
+alwaysApply: true
+---
+
+# Robinhood MCP order handoff
+
+`./start.sh` writes staged signals to `pending_orders.json` (one entry per ticker per day).
+The Python code never sends orders; the agent does, via the `robinhood-trading` MCP.
+
+## Before any order
+1. Discover the `robinhood-trading` tools with `GetDynamicTools` — never guess tool names or params.
+2. Only act on entries with `status: "pending"` and `signal` containing `BUY TRIGGERED`. Treat `ARMED` as watch-only.
+3. Read the Agentic account buying power and positions. Skip if `notional_usd` exceeds buying power or a position in the ticker already exists.
+4. Show the user ticker, shares, entry limit, stop, max risk, then **wait for explicit "yes"** before placing.
+
+## Placing (Robinhood has no OCO/bracket orders)
+1. Entry: limit buy `shares` @ `entry_limit`, time-in-force day.
+2. After the fill is confirmed: stop-market sell all `shares` @ `stop_price`.
+   Robinhood reserves shares per open sell order, so a stop on the full position and a leg-1 limit
+   sell cannot coexist. Do not place `leg1_limit` while the full stop is live.
+3. Scale-out (only when the user asks): cancel the stop, limit sell `leg1_shares` @ `leg1_limit`,
+   then re-place the stop for `leg2_shares` at the entry price (breakeven).
+4. Flatten any remaining position by `flatten_by` (15:40 ET) when asked.
+
+After each step, update the entry's `status` in `pending_orders.json`
+(`submitted` → `filled` → `closed`, or `cancelled`) and record order ids under `orders`.
+
+Never place orders outside the Agentic account, never use market orders for entry,
+and never retry a failed order without re-checking open orders first.

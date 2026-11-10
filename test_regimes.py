@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from datetime import datetime
@@ -1471,17 +1472,18 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                 )
             print("└" + "─" * 126 + "┘")
 
-            # Part 4: Tastytrade 1-Click Human-in-the-Loop Execution Staging
+            # Part 4: Broker staging — Robinhood manual ticket, or Tastytrade HITL transmit
             if (
                 card['Mode'] in ('🚨 BUY TRIGGERED NOW', '🟡 ARMED (Wait Green HL)')
                 or '--dry-run' in sys.argv
                 or '--stage' in sys.argv
             ):
-                from tasty_executor import ALLOWED_ACCOUNT_ID, stage_and_prompt_order
+                from tasty_executor import ALLOWED_ACCOUNT_ID, BROKER, stage_and_prompt_order
 
                 is_dry_run = '--execute-live' not in sys.argv
                 non_interactive = (
-                    '--no-prompt' in sys.argv
+                    BROKER != 'tastytrade'
+                    or '--no-prompt' in sys.argv
                     or (card['Mode'] != '🚨 BUY TRIGGERED NOW' and '--interactive' not in sys.argv)
                 )
                 print()
@@ -1497,6 +1499,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
                         auto_abort_prompt=non_interactive,
                         primary_live_price=card.get('CurrentPrice'),
                         secondary_live_price=card.get('SecondaryPrice'),
+                        signal=card['Mode'],
                     )
                 except Exception as stage_err:
                     print(f"⚠️  [Order Staging Guard on {t}: {stage_err}]")
@@ -1528,7 +1531,9 @@ def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0, dyna
 
 
 if __name__ == '__main__':
-    clip_size = 150000.0
+    from dotenv import load_dotenv
+    load_dotenv()
+    clip_size = float(os.getenv('TARGET_CLIP_USD', '5000'))
     if '--clip' in sys.argv:
         idx = sys.argv.index('--clip')
         if idx + 1 < len(sys.argv):
