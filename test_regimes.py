@@ -1235,6 +1235,30 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0):
                 )
             print("└" + "─" * 126 + "┘")
 
+            # Part 4: Tastytrade 1-Click Human-in-the-Loop Execution Staging
+            if (
+                card['Mode'] in ('🚨 BUY TRIGGERED NOW', '🟡 ARMED (Wait Green HL)')
+                or '--dry-run' in sys.argv
+                or '--stage' in sys.argv
+            ):
+                from tasty_executor import ALLOWED_ACCOUNT_ID, stage_and_prompt_order
+
+                is_dry_run = '--execute-live' not in sys.argv
+                non_interactive = '--no-prompt' in sys.argv or (
+                    card['Mode'] == 'TRADED_TODAY' and '--interactive' not in sys.argv
+                )
+                print()
+                stage_and_prompt_order(
+                    ticker=t,
+                    limit_price=entry_p,
+                    stop_price=stop_p,
+                    leg1_vwap_price=leg1_p,
+                    account_id=ALLOWED_ACCOUNT_ID,
+                    clip_usd=clip_dollars,
+                    dry_run=is_dry_run,
+                    auto_abort_prompt=non_interactive,
+                )
+
 
 def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0):
     if not watch_mode:
