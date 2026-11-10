@@ -4,3 +4,4 @@ __pycache__/
 .DS_Store
 .env
 .tt_session_cache.json
+pending_orders.json

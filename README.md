@@ -17,22 +17,44 @@ Intraday 5-minute **Flush & Reclaim** quantitative backtest engine (`V1` through
 ## Quick Start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+./start.sh              # live HUD, refreshes every 30s (sets up .venv/.env on first run)
+./start.sh once         # single snapshot
+./start.sh backtest     # full V1–V5 backtest
+./start.sh watch 2500   # override clip size ($ per trade)
 ```
+
+### Robinhood automation (Trading MCP)
+
+When a signal fires, the HUD writes the order plan to `pending_orders.json`. In Cursor, ask the
+agent to "place pending orders" — it uses the official Robinhood Trading MCP (configured in
+`.cursor/mcp.json`) and asks you to confirm each order. Orders only go to your separately funded
+Robinhood Agentic account. Connect once via Cursor Settings → Tools & MCPs → `robinhood-trading` → Connect.
+
+### Broker: Robinhood (default)
+
+Robinhood has **no official stock trading REST API**. This repo defaults to `BROKER=robinhood`:
+the live HUD still scans and stages signals, then prints a **manual order ticket** for you to
+enter in the Robinhood app (entry limit, stop, 50% scale-out, leg-2 target). It will not
+auto-submit stock orders.
+
+Set your size in `.env` (`TARGET_CLIP_USD`, risk caps) or pass `--clip 5000` on the CLI.
 
 ### 1. Run the Live Trader Execution HUD (Single Snapshot)
 ```bash
-python test_regimes.py --live
+python test_regimes.py --live --clip 5000
 ```
 
 ### 2. Run the Auto-Refreshing Terminal HUD (Every 30 Seconds)
 ```bash
-python test_regimes.py --watch --clip 150000
+python test_regimes.py --watch --clip 5000
 ```
 
 ### 3. Run the Full `V1` vs `V2` vs `V3` vs `V4` vs `V5` Backtest Audit
 ```bash
 python test_regimes.py
 ```
+
+### Tastytrade (optional live routing)
+
+Set `BROKER=tastytrade`, install `tastytrade`, and fill TT credentials in `.env`. Live transmit
+still requires `--execute-live` plus an Enter confirmation.
