@@ -893,12 +893,68 @@ def get_session_window_banner(now_est, latest_session_date):
     return "🛑 15:40–16:00 EST: PRE-10b18 CUTOFF — FLATTEN ALL INTRADAY TRADES NOW"
 
 
-def render_trader_hud(tickers_list, clip_dollars=150000.0):
+_HUD_CACHE = {
+    '1d': {},
+    '5m': {},
+    'last_full_fetch': 0.0,
+}
+
+
+def safe_yf_history(sym, period, interval, retries=2):
+    """Resilient wrapper around yf.Ticker(sym).history() that catches transient Yahoo chart/rate-limit errors."""
+    for attempt in range(retries + 1):
+        try:
+            df = yf.Ticker(sym).history(period=period, interval=interval)
+            if df is not None and not df.empty:
+                return df
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            if attempt < retries:
+                time.sleep(0.4 * (attempt + 1))
+    return pd.DataFrame()
+
+
+def get_cached_hud_history(sym, need_full=False):
+    """
+    Caches 1y daily and 60d 5m history in memory across --watch cycles, fetching only lightweight 5d 5m
+    delta bars on 30-second refreshes so Yahoo Finance never rate-limits or crashes the HUD.
+    """
+    cached_1d = _HUD_CACHE['1d'].get(sym, pd.DataFrame())
+    cached_5m = _HUD_CACHE['5m'].get(sym, pd.DataFrame())
+
+    if need_full or cached_1d.empty:
+        df_1d = safe_yf_history(sym, period='1y', interval='1d')
+        if not df_1d.empty:
+            _HUD_CACHE['1d'][sym] = df_1d
+            cached_1d = df_1d
+
+    if need_full or cached_5m.empty:
+        df_5m = safe_yf_history(sym, period='60d', interval='5m')
+        if not df_5m.empty:
+            _HUD_CACHE['5m'][sym] = df_5m
+            cached_5m = df_5m
+    else:
+        recent_5m = safe_yf_history(sym, period='5d', interval='5m')
+        if not recent_5m.empty:
+            combined = pd.concat([cached_5m, recent_5m])
+            combined = combined[~combined.index.duplicated(keep='last')].sort_index()
+            _HUD_CACHE['5m'][sym] = combined
+            cached_5m = combined
+
+    return cached_1d.copy(), cached_5m.copy()
+
+
+def render_trader_hud(tickers_list, clip_dollars=150000.0, clear_screen=False):
     est_tz = pytz.timezone('US/Eastern')
     now_est = datetime.now(est_tz)
 
-    spy_1d = yf.Ticker('SPY').history(period='1y', interval='1d')
-    spy_5m = yf.Ticker('SPY').history(period='60d', interval='5m')
+    now_ts = time.time()
+    need_full = (now_ts - _HUD_CACHE['last_full_fetch']) > 1800.0  # Full 1y/60d refresh every 30 mins
+    spy_1d, spy_5m = get_cached_hud_history('SPY', need_full=need_full)
+    if spy_1d.empty or spy_5m.empty:
+        print(f"⚠️  [{now_est.strftime('%H:%M:%S EST')}] Transient Yahoo Finance timeout on SPY; retrying next cycle...")
+        return
     spy_waterfall_map, spy_state = build_spy_intraday_map(spy_5m)
     latest_session_date = spy_state['Date'] if spy_state else now_est.date()
 
@@ -917,16 +973,6 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0):
     spy_max_dd = spy_state['MaxIntradayDropPct'] if spy_state else 0.0
     spy_vs_vwap = spy_state['VsVWAPPct'] if spy_state else 0.0
 
-    print("=" * 128)
-    print(f"🎯 V5 INSTITUTIONAL FLUSH & RECLAIM — TRADER EXECUTION HUD  |  IRA CLIP: ${clip_dollars:,.0f}  |  {now_est.strftime('%Y-%m-%d %H:%M:%S EST')}")
-    print("-" * 128)
-    print(f"SESSION GATE : {session_banner}")
-    print(
-        f"MACRO GATE   : {spy_gate_str}  |  SPY Last: ${spy_last:.2f}  |  SPY VWAP: ${spy_vwap:.2f} ({spy_vs_vwap:+.2f}%)  "
-        f"|  SPY Drawdown from High: {spy_dd:+.2f}% (Intraday Low: {spy_max_dd:+.2f}%)"
-    )
-    print("=" * 128)
-
     # --------------------------------------------------------------------------
     # SECTION B: THE 6-STOCK MASTER RADAR TABLE
     # --------------------------------------------------------------------------
@@ -934,8 +980,7 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0):
     action_cards = []
 
     for t in tickers_list:
-        df_1d = yf.Ticker(t).history(period='1y', interval='1d')
-        df_5m = yf.Ticker(t).history(period='60d', interval='5m')
+        df_1d, df_5m = get_cached_hud_history(t, need_full=need_full)
         if df_5m.empty or df_1d.empty:
             continue
 
@@ -1142,6 +1187,20 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0):
             'Leg2 (+0.85%/Trail)': f"${leg2_p:.2f} / EMA20(${cur_ema20:.2f})"
         })
 
+    if need_full:
+        _HUD_CACHE['last_full_fetch'] = now_ts
+    if clear_screen:
+        print("\033[2J\033[H", end="")
+
+    print("=" * 128)
+    print(f"🎯 V5 INSTITUTIONAL FLUSH & RECLAIM — TRADER EXECUTION HUD  |  IRA CLIP: ${clip_dollars:,.0f}  |  {now_est.strftime('%Y-%m-%d %H:%M:%S EST')}")
+    print("-" * 128)
+    print(f"SESSION GATE : {session_banner}")
+    print(
+        f"MACRO GATE   : {spy_gate_str}  |  SPY Last: ${spy_last:.2f}  |  SPY VWAP: ${spy_vwap:.2f} ({spy_vs_vwap:+.2f}%)  "
+        f"|  SPY Drawdown from High: {spy_dd:+.2f}% (Intraday Low: {spy_max_dd:+.2f}%)"
+    )
+    print("=" * 128)
     print(pd.DataFrame(radar_rows).to_string(index=False))
     print("=" * 128)
 
@@ -1262,13 +1321,17 @@ def render_trader_hud(tickers_list, clip_dollars=150000.0):
 
 def run_live_scanner(tickers_list, watch_mode=False, clip_dollars=150000.0):
     if not watch_mode:
-        render_trader_hud(tickers_list, clip_dollars=clip_dollars)
+        render_trader_hud(tickers_list, clip_dollars=clip_dollars, clear_screen=False)
         return
     try:
         while True:
-            print("\033[2J\033[H", end="")
-            render_trader_hud(tickers_list, clip_dollars=clip_dollars)
-            print("\n[🔄 --watch mode active: refreshing every 30 seconds. Press Ctrl+C to exit.]")
+            try:
+                render_trader_hud(tickers_list, clip_dollars=clip_dollars, clear_screen=True)
+            except KeyboardInterrupt:
+                raise
+            except Exception as err:
+                print(f"\n⚠️  [HUD Refresh Warning: {err} — retrying in 30s...]")
+            print("\n[🔄 --watch mode active (smart delta cache enabled): refreshing every 30 seconds. Press Ctrl+C to exit.]")
             time.sleep(30)
     except KeyboardInterrupt:
         print("\nStopped --watch HUD.")
