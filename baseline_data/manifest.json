@@ -1,0 +1,288 @@
+{
+  "review_baseline_commit": "8bd8ad6ea73faf62e2a70b0c9ae3f7194f7e90cd",
+  "frozen_at_est": "2026-11-10 08:51:11 EST",
+  "python_version": "3.9.6",
+  "platform": "macOS-26.0-arm64-arm-64bit",
+  "data_provider": "Yahoo Finance (yfinance==1.2.0) + TradingView Scanner API",
+  "exchange_timezone": "America/New_York",
+  "regular_session_hours_et": "09:30-16:00",
+  "early_close_session_hours_et": "09:30-13:00",
+  "entry_window_et": "09:50-13:00",
+  "mandatory_flatten_et": "15:40 (regular) / 12:40 (early_close)",
+  "universes": {
+    "core_tickers": [
+      "FISV",
+      "PLNT",
+      "NU"
+    ],
+    "expanded_6_tickers": [
+      "FISV",
+      "PLNT",
+      "NU",
+      "CNC",
+      "EEFT",
+      "GPN"
+    ],
+    "hud_tickers": [
+      "FISV",
+      "PLNT",
+      "EEFT",
+      "CNC",
+      "GPN",
+      "NU"
+    ],
+    "dynamic_snapshot_tickers": [
+      "VIAV",
+      "CHTR",
+      "MGM",
+      "MOS",
+      "FISV",
+      "RDDT"
+    ]
+  },
+  "legacy_earnings_dates": {
+    "FISV": [
+      "2026-11-03",
+      "2027-02-04"
+    ],
+    "PLNT": [
+      "2026-11-05",
+      "2027-02-23"
+    ],
+    "NU": [
+      "2026-08-13",
+      "2026-11-12",
+      "2027-02-18"
+    ],
+    "CNC": [
+      "2026-10-27",
+      "2027-02-02"
+    ],
+    "EEFT": [
+      "2026-10-27",
+      "2027-02-11"
+    ],
+    "GPN": [
+      "2026-11-05",
+      "2027-02-10"
+    ]
+  },
+  "files": {
+    "SPY_1d.csv.gz": {
+      "symbol": "SPY",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "2355bc41c16e48fdb2a91b14852b9409c6b783ba2e0d010ee6089d3b013b4f68"
+    },
+    "SPY_5m.csv.gz": {
+      "symbol": "SPY",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "21d77821e1e989e04338f85e37eeb3f6ea2e772092144d4f2b031e91bd18e3c5"
+    },
+    "FISV_1d.csv.gz": {
+      "symbol": "FISV",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "3f18aca62fe71d9b2d8d7517c74dd39ef60b5758dd5765c7f692654066af828d"
+    },
+    "FISV_5m.csv.gz": {
+      "symbol": "FISV",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "47c1ab8fe9d9f9558535a75eda87665088a3baca213623ef8900c7d7f70fa7f0"
+    },
+    "PLNT_1d.csv.gz": {
+      "symbol": "PLNT",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "75b247e8f5ae4d85f2b33f1e84b89b2a41ab5e492fe6ddd78cf47116f2ba0aa7"
+    },
+    "PLNT_5m.csv.gz": {
+      "symbol": "PLNT",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "84b02778445f7847fa8d410f4a483f132e3e4e197c1205c5cc1460dd9cede7cc"
+    },
+    "NU_1d.csv.gz": {
+      "symbol": "NU",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "4546f2613ce349d0e0b970a5f2d2d0027b252997745d137a4a3f3b1fb964ef19"
+    },
+    "NU_5m.csv.gz": {
+      "symbol": "NU",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "384ad0242eb8cf9dc3a88a59ff5d032bbbb710dfaa1c1ff6bea6918f94c9ec93"
+    },
+    "CNC_1d.csv.gz": {
+      "symbol": "CNC",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "9ee325878d997377d78d9ca440d49265929ece0348e27a4457309b0f4f43dee8"
+    },
+    "CNC_5m.csv.gz": {
+      "symbol": "CNC",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "255e229e22a6282747101218246ffb8814b507407296613004dd739ba9bcafcc"
+    },
+    "EEFT_1d.csv.gz": {
+      "symbol": "EEFT",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "dd04773fd6115713a7d9ebd41767e2bfa2820312d3ff429e200e2a3b66b38651"
+    },
+    "EEFT_5m.csv.gz": {
+      "symbol": "EEFT",
+      "interval": "5m",
+      "rows": 4601,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "289f1a61700f7ccd3a4e4ab2195670b6a0461d8227282854bd8b4220adf0a98f"
+    },
+    "GPN_1d.csv.gz": {
+      "symbol": "GPN",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "dcc7b1eacb200f750d3c161c78be3708cd15bc1ea2ce936499996ef18e9c15dc"
+    },
+    "GPN_5m.csv.gz": {
+      "symbol": "GPN",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "db3822db90580e3f389de6ef5bbc76ff7ebbe6a9af315e0dbf6422e263b7c037"
+    },
+    "VIAV_1d.csv.gz": {
+      "symbol": "VIAV",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "ef2e8434990c6cd777f26c0722172e7d0b9cf9a59020f2b3906fc54ff8e3c2ff"
+    },
+    "VIAV_5m.csv.gz": {
+      "symbol": "VIAV",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "4be7d490c6241b173e570495a1b598139015ecba0fc7bac5f1e02888b19d42a4"
+    },
+    "CHTR_1d.csv.gz": {
+      "symbol": "CHTR",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "767b95cc5b4c714774207406a9263db086222c9899b96cb37ea63d245fe827ae"
+    },
+    "CHTR_5m.csv.gz": {
+      "symbol": "CHTR",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "f683d81461f83ea3ba59f6e49164a3349dd57695ce6736f5b4281795f61d9397"
+    },
+    "MGM_1d.csv.gz": {
+      "symbol": "MGM",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "dfed780a0e5303536e21dbc90b9c5a907bb207d5b84a11b3110a20b78a62f254"
+    },
+    "MGM_5m.csv.gz": {
+      "symbol": "MGM",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "466cbdc469c71578646f965320c9f5264707f19897cd3e59658da4a5315c8d2f"
+    },
+    "MOS_1d.csv.gz": {
+      "symbol": "MOS",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "d0a7b2b8cf040a84a36b04bc52453844ae89dd37b686931266e1c7f2da6298c7"
+    },
+    "MOS_5m.csv.gz": {
+      "symbol": "MOS",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "c7210d087d62b1f79f5ba347f0a609b4e4e2c15b2915d673d1d26c42f5149b26"
+    },
+    "RDDT_1d.csv.gz": {
+      "symbol": "RDDT",
+      "interval": "1d",
+      "rows": 251,
+      "start_ts": "2025-11-10 00:00:00-05:00",
+      "end_ts": "2026-11-09 00:00:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "2bc31926d3057a2e41775878ea8fef18ba3b2ba1b572c866a2b6f9778428e39e"
+    },
+    "RDDT_5m.csv.gz": {
+      "symbol": "RDDT",
+      "interval": "5m",
+      "rows": 4680,
+      "start_ts": "2026-08-17 09:30:00-04:00",
+      "end_ts": "2026-11-09 15:55:00-05:00",
+      "timezone": "America/New_York",
+      "sha256": "bfa4379598419e8d1cc5786a03c730bf48c99d641ef3948228bfa6b074e161ab"
+    }
+  }
+}

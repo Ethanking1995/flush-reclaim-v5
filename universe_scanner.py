@@ -1,689 +1,492 @@
+"""
+universe_scanner.py
+===================
+Audited V6 Dynamic Universe Discovery Funnel with Hard Sanity Guards.
+
+Fixes all V5 scanner inconsistencies:
+  1. Uses the single shared `EarningsOracle` (`earnings_oracle.py`); unknown earnings
+     remain `UNKNOWN` (never labeled `N/A (>14d)`).
+  2. Separates overnight discovery from RTH spread verification: missing/zero quotes
+     outside regular trading hours are marked `UNVERIFIED_OFF_HOURS`, never verified.
+  3. Deep-validates ALL candidates before final selection.
+  4. Handles zero survivors cleanly without `KeyError: 'Score'`.
+  5. Keeps `core_monitored_tickers` (`FISV`, `PLNT`, `NU`) strictly distinct from
+     `order_eligible_tickers` (only tickers passing all gates are order-eligible).
+  6. Persists full snapshot metadata (`data_cutoff_ts`, `effective_session_date`,
+     `config_sha256`, `selection_rules`, `rejection_reasons`) to `discovered_candidates.json`.
+"""
+
 from __future__ import annotations
-
+import argparse
+from datetime import datetime, date
+import hashlib
 import json
-import math
-import sys
-import time
+import os
+from typing import Any, Dict, List, Optional, Tuple
 import warnings
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Optional
-
 import numpy as np
 import pandas as pd
-import pytz
 import yfinance as yf
-from httpx import Client
+
+from config_schema import StrategyConfig, ExecutionConfig
+from market_calendar import NYSECalendar, NY_TZ, normalize_to_ny_tz
+from earnings_oracle import EarningsOracle
 
 warnings.filterwarnings("ignore")
 
-# ==============================================================================
-# HARD SANITY THRESHOLDS (NON-NEGOTIABLE PROGRAMMATIC GATES)
-# ==============================================================================
-MIN_PRICE_USD = 20.00
-MAX_PRICE_USD = 200.00
-MIN_ADTV_20D_SHARES = 1_000_000
-MIN_MEDIAN_DOLLAR_VOL_USD = 50_000_000.0
-MAX_SPREAD_USD = 0.04
-MAX_SPREAD_PCT = 0.0008  # 0.08%
+CORE_MONITORED_TICKERS = ["FISV", "PLNT", "NU"]
 
-MIN_MARKET_CAP_USD = 3_000_000_000.0       # $3B Mid/Large Cap floor
-MIN_HEALTHCARE_MCAP_USD = 20_000_000_000.0  # $20B floor for Healthcare (blocks FDA binary drug risk)
-MAX_10D_CRASH_PCT = -0.35                   # Reject > -35% 10-day falling knives
+FALLBACK_LIQUID_UNIVERSE = [
+    "FISV", "PLNT", "NU", "GPN", "EEFT", "CNC", "CVS", "HUM", "UNH", "ELV", "CI", "MOH",
+    "PYPL", "SQ", "AFRM", "SOFI", "UPST", "ALLY", "COF", "SYF", "DFS", "AXP", "V", "MA",
+    "BAC", "WFC", "C", "JPM", "GS", "MS", "SCHW", "IBKR", "HOOD", "COIN", "usb", "PNC", "TFC", "FITB", "KEY", "RF", "HBAN", "CFG",
+    "DAL", "UAL", "AAL", "LUV", "CCL", "RCL", "NCLH", "MAR", "HLT", "ABNB", "BKNG", "EXPE", "UBER", "LYFT", "DASH",
+    "NKE", "LULU", "UAA", "DECK", "CROX", "ONON", "SBUX", "MCD", "CMG", "DPZ", "YUM", "QSR", "WEN", "DRI", "TGT", "WMT", "COST", "DG", "DLTR", "ROST", "TJX", "BBY", "HD", "LOW",
+    "DIS", "NFLX", "WBD", "PARA", "CMCSA", "CHTR", "T", "VZ", "TMUS", "SPOT", "ROKU", "TTD", "PINS", "SNAP", "RDDT",
+    "INTC", "AMD", "MU", "QCOM", "TXN", "MRVL", "ON", "MCHP", "STM", "NXPI", "SWKS", "QRVO", "GLW", "HPQ", "DELL", "HPE", "CSCO", "JNPR", "ANET",
+    "CRM", "ORCL", "SAP", "ADBE", "INTU", "WDAY", "NOW", "TEAM", "SNOW", "DDOG", "NET", "CRWD", "ZS", "PANW", "FTNT", "OKTA", "DOCU", "ZM", "TWLO", "U", "PLTR", "PATH",
+    "BA", "GE", "HON", "CAT", "DE", "URI", "LMT", "RTX", "NOC", "GD", "MMM", "EMR", "ETN", "ITW", "PH", "FDX", "UPS", "CSX", "UNP", "NSC",
+    "XOM", "CVX", "COP", "EOG", "SLB", "HAL", "BKR", "OXY", "DVN", "FANG", "MPC", "VLO", "PSX", "KMI", "WMB", "OKE",
+    "FCX", "NEM", "GOLD", "AA", "NUE", "STLD", "CLF", "X", "DOW", "LYB", "DD", "PPG", "SHW", "ALB", "MOS", "CF",
+    "PFE", "BMY", "MRK", "ABBV", "GILD", "AMGN", "BIIB", "REGN", "VRTX", "ZTS", "BSX", "MDT", "ABT", "SYK", "EW", "ISRG", "BDX", "BAX", "DXCM", "ALGN", "HOLX", "GEHC",
+    "F", "GM", "STLA", "TSLA", "RIVN", "LCID", "TM", "HMC", "APTV", "BWA", "LEA", "LKQ",
+    "KO", "PEP", "MNST", "CELH", "KDP", "STZ", "TAP", "BUD", "PG", "CL", "KMB", "EL", "CHD", "CLX", "GIS", "K", "CAG", "CPB", "HSY", "MDLZ", "KHC", "TSN", "HRL",
+    "NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL", "PEG", "ED", "PCG", "EIX", "VST", "CEG", "NRG",
+    "AMT", "PLD", "CCI", "EQIX", "DLR", "O", "SPG", "WELL", "VICI", "PSA", "EXR", "AVB", "EQR", "INVH",
+    "KSS", "M", "JWN", "GAP", "ANF", "AEO", "URBN", "FIVE", "OLLI", "BURL", "ASO", "DKS", "TSCO", "WSM", "RH", "WAY", "W", "ETSY", "EBAY", "CHWY", "CVNA", "KMX", "AN",
+]
 
-MIN_DISLOCATION_60D = -0.12                 # 30d low must be >= 12.0% below 60d high
-MIN_5D_GREEN_VOL_RATIO = 0.55               # >= 55% of trailing 5d volume on green days (Close > Open)
-ER_BLACKOUT_DAYS = 14                       # Reject any stock with earnings within 14 calendar days
-
-CORE_VERIFIED_TICKERS = ["FISV", "PLNT", "EEFT"]
-CACHE_FILE_PATH = Path(__file__).resolve().parent / "discovered_candidates.json"
-TV_SCANNER_URL = "https://scanner.tradingview.com/america/scan"
-
-# Known Q4 2026 / Q1 2027 earnings dates fallback map
-KNOWN_EARNINGS_DATES = {
-    "FISV": ["2026-11-03", "2027-02-09"],
-    "PLNT": ["2026-11-05", "2027-02-23"],
-    "NU": ["2026-11-12", "2027-02-18"],
-    "CNC": ["2026-10-27", "2027-02-02"],
-    "EEFT": ["2026-10-27", "2027-02-10"],
-    "GPN": ["2026-11-02", "2027-02-10"],
+HARD_BLACKLIST_TICKERS = {
+    "BABA", "JD", "PDD", "BIDU", "NIO", "XPEV", "LI", "BILI", "TME", "IQ", "VIPS", "ZTO", "FUTU", "TIGR", "BEKE", "TCOM", "YUMC", "HTHT",
+    "SMCI", "DJT", "GME", "AMC", "MARA", "RIOT", "CLSK", "MSTR", "MSTX", "CONL", "NVDL", "TSLL", "TQQQ", "SQQQ", "SOXL", "SOXS",
 }
 
-# Explicit audit probe tickers injected into every scan to verify 100% programmatic blocking
-# of Biotech, Small/Mid-Cap Healthcare, Chinese ADRs, Low-Volume (<1M ADTV), Zombie Cash-Burners,
-# and 14-Day Earnings Blackout names.
-AUDIT_PROBE_TICKERS = [
-    # Core & Known Compounders
-    "FISV", "PLNT", "EEFT", "CNC", "GPN", "NU",
-    # Biotechs & <$20B Healthcare (Must be 100% blocked by Module 2)
-    "INCY", "VKTX", "HALO", "ALGN", "BNTX",
-    # Chinese ADRs / Non-US Listings (Must be 100% blocked by Module 2)
-    "BABA", "PDD", "JD", "BIDU",
-    # Low-Volume / Illiquid / Outside Price Band (Must be 100% blocked by Module 1)
-    "CHE", "WDFC", "NVR",
-    # Cash-Burning "Zombie" Companies (OCF <= 0 & EBITDA <= 0, Must be 100% blocked by Module 2)
-    "IONQ", "PLUG",
-    # Pre-Earnings Blackout Window (Within 14d of Nov 9, 2026 -> Must be blocked by Module 3)
-    "HD", "CSCO", "DIS",
+EXPECTED_SCANNER_COLUMNS = [
+    "Ticker", "Price", "ADTV_M", "DolVol_M", "ATR_Pct", "HL_10d",
+    "Vol_Ratio", "Close_50d_Pct", "MarketCap_B", "Sector", "Industry",
+    "Spread_Cents", "Spread_Status", "Next_ER", "ER_Status", "Score",
 ]
 
 
-def fetch_broad_us_universe(max_rows: int = 500) -> dict[str, dict[str, Any]]:
+def is_regular_trading_hours(now_et: Optional[datetime] = None, calendar: Optional[NYSECalendar] = None) -> bool:
+    cal = calendar or NYSECalendar()
+    dt = now_et or datetime.now(NY_TZ)
+    dt_ny = dt.astimezone(NY_TZ) if dt.tzinfo else dt.replace(tzinfo=NY_TZ)
+    sched = cal.get_session_schedule(dt_ny.date())
+    if not sched.is_trading_day or sched.market_open_et is None or sched.market_close_et is None:
+        return False
+    return sched.market_open_et <= dt_ny <= sched.market_close_et
+
+
+def evaluate_quote_spread(
+    bid: Optional[float],
+    ask: Optional[float],
+    last: Optional[float],
+    is_rth: bool,
+    exec_cfg: ExecutionConfig = ExecutionConfig(),
+) -> Tuple[bool, Optional[float], str, Optional[str]]:
     """
-    Queries the TradingView US Equity Scanner API for liquid NYSE/NASDAQ equities
-    plus all AUDIT_PROBE_TICKERS to assemble the raw candidate universe with baseline
-    metadata (company name, sector, industry, country, marketCap, ebitda, operatingCashflow,
-    and next earnings timestamp).
+    Distinguish overnight discovery from execution-time RTH spread verification:
+      - Outside regular trading hours or when bid/ask is missing off-hours:
+        returns `(True, None, "UNVERIFIED_OFF_HOURS", None)` — NEVER marked verified!
+      - During regular trading hours:
+        - Missing/zero bid/ask -> `(False, None, "MISSING_RTH_QUOTE", "REJECTED_MISSING_RTH_QUOTE")`
+        - Spread > $0.04 or > 0.08% -> `(False, spread_cents, "REJECTED_WIDE_SPREAD", reason)`
+        - Spread within limits -> `(True, spread_cents, "VERIFIED_RTH", None)`
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-        "Content-Type": "application/json",
+    has_valid_ba = (
+        bid is not None
+        and ask is not None
+        and bid > 0
+        and ask >= bid
+    )
+    if not has_valid_ba:
+        if not is_rth:
+            return True, None, "UNVERIFIED_OFF_HOURS", None
+        return False, None, "MISSING_RTH_QUOTE", "REJECTED_MISSING_RTH_QUOTE"
+
+    spread_dollars = round(float(ask) - float(bid), 4)
+    spread_cents = round(spread_dollars * 100.0, 2)
+    ref_px = float(last) if (last is not None and last > 0) else float(ask)
+    spread_pct = spread_dollars / ref_px if ref_px > 0 else 1.0
+
+    if spread_dollars > exec_cfg.max_bid_ask_spread_dollars + 1e-6 or spread_pct > exec_cfg.max_bid_ask_spread_pct + 1e-6:
+        return (
+            False,
+            spread_cents,
+            "REJECTED_WIDE_SPREAD",
+            f"Spread ${spread_dollars:.2f} ({spread_pct*100:.3f}%) exceeds ${exec_cfg.max_bid_ask_spread_dollars:.2f} / {exec_cfg.max_bid_ask_spread_pct*100:.2f}%",
+        )
+
+    if is_rth:
+        return True, spread_cents, "VERIFIED_RTH", None
+    else:
+        return True, spread_cents, "UNVERIFIED_OFF_HOURS", None
+
+
+def deep_validate_candidate(
+    symbol: str,
+    info: dict,
+    as_of_date: date,
+    is_rth: bool,
+    oracle: EarningsOracle,
+    cfg: StrategyConfig = StrategyConfig(),
+    exec_cfg: ExecutionConfig = ExecutionConfig(),
+) -> Tuple[bool, Dict[str, Any], Optional[str]]:
+    """
+    Programmatic deep validation of a candidate's fundamentals, sector/industry,
+    country, debt, earnings blackout (via shared `EarningsOracle`), and quote spread.
+    """
+    sym = symbol.upper()
+    if sym in HARD_BLACKLIST_TICKERS:
+        return False, {}, "REJECTED_HARD_BLACKLIST"
+
+    quote_type = info.get("quoteType", "EQUITY")
+    if quote_type != "EQUITY":
+        return False, {}, f"REJECTED_NON_EQUITY ({quote_type})"
+
+    country = info.get("country", "United States")
+    if country and country not in ("United States", "USA", "Puerto Rico"):
+        if sym not in CORE_MONITORED_TICKERS:
+            return False, {}, f"REJECTED_NON_US_COUNTRY ({country})"
+
+    sector = info.get("sector", "Unknown") or "Unknown"
+    industry = info.get("industry", "Unknown") or "Unknown"
+    mcap = float(info.get("marketCap", 0) or 0)
+
+    if "Biotechnology" in industry or "Pharmaceutical" in industry:
+        return False, {}, f"REJECTED_BIOTECH_PHARMA ({industry})"
+
+    if sector == "Healthcare" and mcap < 20_000_000_000:
+        return False, {}, f"REJECTED_SMALL_HEALTHCARE (MarketCap ${mcap/1e9:.1f}B < $20B)"
+
+    if mcap > 0 and mcap < 2_000_000_000:
+        return False, {}, f"REJECTED_MICRO_CAP (MarketCap ${mcap/1e9:.2f}B < $2B)"
+
+    # Ingest any yfinance earnings timestamp into the shared EarningsOracle
+    oracle.ingest_yfinance_info(sym, info)
+    er_res = oracle.check_blackout(sym, as_of_date, use_filter=cfg.use_er_blackout_filter)
+    if er_res.is_blocked:
+        return False, {}, f"REJECTED_EARNINGS ({er_res.display_label})"
+
+    bid = info.get("bid")
+    ask = info.get("ask")
+    last = info.get("currentPrice") or info.get("regularMarketPrice")
+    spread_ok, spread_cents, spread_status, spread_reject = evaluate_quote_spread(
+        bid=bid,
+        ask=ask,
+        last=last,
+        is_rth=is_rth,
+        exec_cfg=exec_cfg,
+    )
+    if not spread_ok:
+        return False, {}, spread_reject or "REJECTED_SPREAD"
+
+    dte = info.get("debtToEquity", 0) or 0
+    if dte and dte > 450 and sector not in ("Financial Services", "Utilities", "Real Estate"):
+        return False, {}, f"REJECTED_HIGH_DEBT_TO_EQUITY ({dte})"
+
+    meta = {
+        "MarketCap_B": round(mcap / 1e9, 1) if mcap > 0 else 0.0,
+        "Sector": sector,
+        "Industry": industry,
+        "Spread_Cents": spread_cents,
+        "Spread_Status": spread_status,
+        "Next_ER": er_res.display_label,
+        "ER_Status": er_res.status,
+        "deep_validated": True,
     }
-    columns = [
-        "name",
-        "description",
-        "sector",
-        "industry",
-        "country",
-        "market_cap_basic",
-        "ebitda",
-        "cash_f_operating_activities_ttm",
-        "earnings_release_next_date",
-        "close",
-        "average_volume_30d_calc",
-        "High.3M",
-        "Low.1M",
-        "SMA5",
-    ]
+    return True, meta, None
 
-    universe_meta: dict[str, dict[str, Any]] = {}
 
-    # 1. Broad US Market Scan (NYSE + NASDAQ stocks in $20-$200 range)
-    payload_broad = {
-        "filter": [
-            {"left": "type", "operation": "equal", "right": "stock"},
-            {"left": "exchange", "operation": "in_range", "right": ["NYSE", "NASDAQ"]},
-            {"left": "close", "operation": "in_range", "right": [MIN_PRICE_USD, MAX_PRICE_USD]},
-            {"left": "average_volume_30d_calc", "operation": "greater", "right": MIN_ADTV_20D_SHARES},
-            {"left": "market_cap_basic", "operation": "greater", "right": MIN_MARKET_CAP_USD},
-            {"left": "Perf.W", "operation": "greater", "right": -2},
-        ],
-        "options": {"lang": "en"},
-        "markets": ["america"],
-        "symbols": {"query": {"types": []}, "tickers": []},
-        "columns": columns,
-        "sort": {"sortBy": "average_volume_30d_calc", "sortOrder": "desc"},
-        "range": [0, max_rows],
-    }
+def compute_heuristic_discovery_score(row: Dict[str, Any]) -> float:
+    """
+    Compute the 0-100 heuristic ranking score (formerly overclaimed as 'institutional footprint').
+    Combines higher-low count (0-35), volume ratio (0-25), ATR compression (0-20), and dollar liquidity (0-20).
+    """
+    hl_pts = min(35.0, max(0.0, (float(row["HL_10d"]) - 5.0) * 7.0))
+    vol_pts = min(25.0, max(0.0, (float(row["Vol_Ratio"]) - 0.95) * 80.0))
+    atr_pts = min(20.0, max(0.0, (0.045 - float(row["ATR_Pct"])) * 800.0))
+    liq_pts = min(20.0, max(0.0, np.log10(max(float(row["DolVol_M"]), 50.0) / 50.0) * 18.0))
+    return round(hl_pts + vol_pts + atr_pts + liq_pts, 1)
 
+
+def rank_and_filter_candidates(
+    raw_candidates: List[Dict[str, Any]],
+) -> pd.DataFrame:
+    """
+    Given a list of candidate dicts, compute heuristic `Score` and sort descending.
+    Cleanly returns an empty DataFrame with `EXPECTED_SCANNER_COLUMNS` when `raw_candidates` is empty
+    (never raises `KeyError: 'Score'`).
+    """
+    if not raw_candidates:
+        return pd.DataFrame(columns=EXPECTED_SCANNER_COLUMNS)
+
+    for c in raw_candidates:
+        c["Score"] = compute_heuristic_discovery_score(c)
+
+    df = pd.DataFrame(raw_candidates)
+    for col in EXPECTED_SCANNER_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    df = df.sort_values(by=["Score", "Ticker"], ascending=[False, True]).reset_index(drop=True)
+    return df
+
+
+def fetch_broad_us_equities_pool() -> List[str]:
     try:
-        with Client(timeout=6.0, headers=headers) as client:
-            resp = client.post(TV_SCANNER_URL, json=payload_broad)
-            if resp.status_code == 200:
-                for row in resp.json().get("data", []):
-                    d = row.get("d", [])
-                    if not d or not d[0] or not str(d[0]).isalpha():
-                        continue
-                    sym = str(d[0]).upper()
-                    # Pre-keep any stock that has pulled back >= 10% from 3M high or is in our probe set
-                    h3m, l1m = d[11], d[12]
-                    if sym in AUDIT_PROBE_TICKERS or (
-                        h3m and l1m and (float(l1m) - float(h3m)) / float(h3m) <= -0.10
-                    ):
-                        universe_meta[sym] = {
-                            "company": d[1] or sym,
-                            "sector": d[2],
-                            "industry": d[3],
-                            "country": d[4],
-                            "marketCap": d[5],
-                            "ebitda": d[6],
-                            "operatingCashflow": d[7],
-                            "er_timestamp": d[8],
-                            "tv_close": d[9],
-                            "tv_adtv30": d[10],
-                        }
-
-            # 2. Explicitly fetch metadata for all AUDIT_PROBE_TICKERS so every trap is tested
-            probe_tv_syms = []
-            for s in AUDIT_PROBE_TICKERS:
-                for ex in ("NASDAQ", "NYSE", "AMEX"):
-                    probe_tv_syms.append(f"{ex}:{s}")
-            payload_probes = {
-                "symbols": {"tickers": probe_tv_syms},
-                "columns": columns,
-            }
-            resp_p = client.post(TV_SCANNER_URL, json=payload_probes)
-            if resp_p.status_code == 200:
-                for row in resp_p.json().get("data", []):
-                    d = row.get("d", [])
-                    if not d or not d[0]:
-                        continue
-                    sym = str(d[0]).upper()
-                    universe_meta[sym] = {
-                        "company": d[1] or sym,
-                        "sector": d[2],
-                        "industry": d[3],
-                        "country": d[4],
-                        "marketCap": d[5],
-                        "ebitda": d[6],
-                        "operatingCashflow": d[7],
-                        "er_timestamp": d[8],
-                        "tv_close": d[9],
-                        "tv_adtv30": d[10],
-                    }
+        import urllib.request
+        url = "https://scanner.tradingview.com/america/scan"
+        payload = {
+            "filter": [
+                {"left": "type", "operation": "equal", "right": "stock"},
+                {"left": "exchange", "operation": "in_range", "right": ["NYSE", "NASDAQ"]},
+                {"left": "close", "operation": "in_range", "right": [20.0, 200.0]},
+                {"left": "average_volume_30d_calc", "operation": "greater", "right": 1200000},
+                {"left": "Value.Traded", "operation": "greater", "right": 55000000},
+                {"left": "market_cap_basic", "operation": "greater", "right": 2500000000},
+            ],
+            "options": {"lang": "en"},
+            "markets": ["america"],
+            "symbols": {"query": {"types": []}, "tickers": []},
+            "columns": ["name", "close", "volume", "average_volume_30d_calc", "Value.Traded", "market_cap_basic", "sector", "industry"],
+            "sort": {"sortBy": "Value.Traded", "sortOrder": "desc"},
+            "range": [0, 300],
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tickers: List[str] = []
+        for row in data.get("data", []):
+            d = row.get("d", [])
+            if not d:
+                continue
+            sym = str(d[0]).strip().upper()
+            industry = str(d[7] or "")
+            sector = str(d[6] or "")
+            mcap = float(d[5] or 0)
+            if "." in sym or "/" in sym or "-" in sym:
+                continue
+            if sym in HARD_BLACKLIST_TICKERS:
+                continue
+            if "Biotechnology" in industry or "Pharmaceutical" in industry:
+                continue
+            if sector == "Health Technology" and mcap < 20_000_000_000:
+                continue
+            tickers.append(sym)
+        for core in CORE_MONITORED_TICKERS:
+            if core not in tickers:
+                tickers.append(core)
+        return list(dict.fromkeys(tickers))
     except Exception:
-        pass
-
-    for s in AUDIT_PROBE_TICKERS:
-        if s not in universe_meta:
-            universe_meta[s] = {"company": s}
-
-    return universe_meta
+        pool = [t.upper() for t in FALLBACK_LIQUID_UNIVERSE if t.upper() not in HARD_BLACKLIST_TICKERS]
+        return list(dict.fromkeys(pool))
 
 
-def enrich_with_yfinance_info(sym: str, base_meta: dict[str, Any], is_rth_open: bool) -> dict[str, Any]:
-    """
-    Merges `yf.Ticker(sym).info` with fallback metadata so sector, industry, country,
-    marketCap, operatingCashflow, ebitda, and RTH bid/ask spreads are verified via Yahoo Finance.
-    """
-    meta = dict(base_meta)
-    try:
-        info = yf.Ticker(sym).info or {}
-    except Exception:
-        info = {}
+def run_autonomous_discovery_funnel(
+    max_candidates: int = 8,
+    save_json: bool = True,
+    as_of_dt: Optional[datetime] = None,
+    cfg: StrategyConfig = StrategyConfig(),
+    exec_cfg: ExecutionConfig = ExecutionConfig(),
+    oracle: Optional[EarningsOracle] = None,
+) -> pd.DataFrame:
+    cal = NYSECalendar()
+    now_et = as_of_dt or datetime.now(NY_TZ)
+    now_ny = now_et.astimezone(NY_TZ) if now_et.tzinfo else now_et.replace(tzinfo=NY_TZ)
+    is_rth = is_regular_trading_hours(now_ny, cal)
+    er_oracle = oracle or EarningsOracle(
+        blackout_days=cfg.er_blackout_calendar_days,
+        unknown_policy=cfg.er_unknown_policy,
+    )
 
-    if info.get("shortName") or info.get("longName"):
-        meta["company"] = info.get("shortName") or info.get("longName")
-    if info.get("sector"):
-        meta["sector"] = info.get("sector")
-    if info.get("industry"):
-        meta["industry"] = info.get("industry")
-    if info.get("country"):
-        meta["country"] = info.get("country")
-    if info.get("marketCap") is not None:
-        meta["marketCap"] = info.get("marketCap")
-    if info.get("operatingCashflow") is not None:
-        meta["operatingCashflow"] = info.get("operatingCashflow")
-    if info.get("ebitda") is not None:
-        meta["ebitda"] = info.get("ebitda")
-    meta["quoteType"] = info.get("quoteType", "EQUITY")
+    pool = fetch_broad_us_equities_pool()
+    rejection_reasons: Dict[str, str] = {}
 
-    # Bid-Ask Spread extraction when RTH order book is live
-    if is_rth_open:
-        bid = float(info.get("bid") or 0.0)
-        ask = float(info.get("ask") or 0.0)
-        if bid > 0 and ask > bid:
-            meta["bid"] = bid
-            meta["ask"] = ask
-
-    return meta
-
-
-def resolve_next_earnings_date(
-    sym: str, meta: dict[str, Any], ref_date: date
-) -> tuple[Optional[date], bool, str]:
-    """
-    Dynamically queries upcoming earnings date from KNOWN_EARNINGS_DATES, TradingView
-    earnings calendar timestamp, and `yf.Ticker(sym).calendar`.
-    Returns (next_er_date, is_in_14d_blackout, formatted_er_str).
-    """
-    candidate_dates: list[date] = []
-
-    # 1. Known earnings dates map
-    for d_str in KNOWN_EARNINGS_DATES.get(sym, []):
-        try:
-            dt = pd.Timestamp(d_str).date()
-            if dt >= ref_date:
-                candidate_dates.append(dt)
-        except Exception:
-            pass
-
-    # 2. TradingView next earnings timestamp
-    er_ts = meta.get("er_timestamp")
-    if er_ts:
-        try:
-            dt = datetime.utcfromtimestamp(float(er_ts)).date()
-            if dt >= ref_date:
-                candidate_dates.append(dt)
-        except Exception:
-            pass
-
-    # 3. Dynamic yf.Ticker(sym).calendar lookup if needed
-    if not candidate_dates:
-        try:
-            cal = yf.Ticker(sym).calendar
-            if isinstance(cal, dict) and "Earnings Date" in cal:
-                for ed in cal["Earnings Date"]:
-                    dt = pd.Timestamp(ed).date()
-                    if dt >= ref_date:
-                        candidate_dates.append(dt)
-        except Exception:
-            pass
-
-    if not candidate_dates:
-        return None, False, "N/A (>14d)"
-
-    next_er = min(candidate_dates)
-    days_until = (next_er - ref_date).days
-    in_blackout = 0 <= days_until <= ER_BLACKOUT_DAYS
-    return next_er, in_blackout, next_er.strftime("%Y-%m-%d")
-
-
-def evaluate_candidate_gates(
-    sym: str,
-    df_1d: pd.DataFrame,
-    meta: dict[str, Any],
-    ref_date: date,
-    quote_bid: Optional[float] = None,
-    quote_ask: Optional[float] = None,
-) -> tuple[bool, str, Optional[dict[str, Any]]]:
-    """
-    Runs a single stock through all 4 Automated Modules:
-      - Module 1: Automated Liquidity & Spread Enforcement ($20-$200, >=1M ADTV, >=$50M Dollar Vol, Spread <= $0.04 & <= 0.08%)
-      - Module 2: Hardcoded "Falling Knife" & Biotech / Foreign / Zombie Blacklist
-      - Module 3: 3-Stage Regime & 14-Day Pre-Earnings Blackout Screener
-      - Module 4: Institutional Accumulation Score Calculation
-    Returns (passed, rejection_reason_or_ok, candidate_record).
-    """
-    if df_1d is None or df_1d.empty or len(df_1d) < 60:
-        return False, "MODULE_1_INSUFFICIENT_HISTORY (<60d)", None
-
-    df = df_1d.dropna(subset=["Open", "High", "Low", "Close", "Volume"]).copy()
-    if len(df) < 60:
-        return False, "MODULE_1_INSUFFICIENT_HISTORY (<60d)", None
-
-    close = float(df["Close"].iloc[-1])
-    adtv_20d = float(df["Volume"].iloc[-20:].mean())
-    med_dollar_vol_20d = float((df["Volume"] * df["Close"]).iloc[-20:].median())
-
-    # ==========================================================================
-    # MODULE 1: AUTOMATED LIQUIDITY & SPREAD ENFORCEMENT
-    # ==========================================================================
-    if not (MIN_PRICE_USD <= close <= MAX_PRICE_USD):
-        return (
-            False,
-            f"MODULE_1_PRICE_OUT_OF_BOUNDS (${close:.2f} not in [${MIN_PRICE_USD:.0f}, ${MAX_PRICE_USD:.0f}])",
-            None,
-        )
-
-    if adtv_20d < MIN_ADTV_20D_SHARES:
-        return (
-            False,
-            f"MODULE_1_LOW_ADTV ({adtv_20d:,.0f} sh/d < {MIN_ADTV_20D_SHARES:,} floor)",
-            None,
-        )
-
-    if med_dollar_vol_20d < MIN_MEDIAN_DOLLAR_VOL_USD:
-        return (
-            False,
-            f"MODULE_1_LOW_DOLLAR_VOL (${med_dollar_vol_20d / 1e6:.1f}M/d < ${MIN_MEDIAN_DOLLAR_VOL_USD / 1e6:.0f}M floor)",
-            None,
-        )
-
-    bid = quote_bid if quote_bid is not None else meta.get("bid")
-    ask = quote_ask if quote_ask is not None else meta.get("ask")
-    if bid is not None and ask is not None and float(bid) > 0 and float(ask) > float(bid):
-        spread_usd = float(ask) - float(bid)
-        spread_pct = spread_usd / close
-        if spread_usd > MAX_SPREAD_USD or spread_pct > MAX_SPREAD_PCT:
-            return (
-                False,
-                f"MODULE_1_WIDE_BID_ASK_SPREAD (${spread_usd:.2f} / {spread_pct * 100:.3f}% > $0.04 or 0.08%)",
-                None,
-            )
-
-    # ==========================================================================
-    # MODULE 2: HARDCODED "FALLING KNIFE" & BIOTECH / ADR / ZOMBIE BLACKLIST
-    # ==========================================================================
-    company_name = str(meta.get("company") or sym)
-    sector = str(meta.get("sector") or "")
-    industry = str(meta.get("industry") or "")
-    country = str(meta.get("country") or "")
-    mcap = float(meta.get("marketCap") or 0.0)
-    ocf = meta.get("operatingCashflow")
-    ebitda = meta.get("ebitda")
-
-    # 2a. Country / Chinese ADR Blacklist
-    if (
-        (country and country != "United States")
-        or "ADR" in company_name.upper()
-        or "CAYMAN" in country.upper()
-        or "CHINA" in country.upper()
-    ):
-        return (
-            False,
-            f"MODULE_2_FOREIGN_OR_ADR_BLACKLIST (Country='{country}', Name='{company_name[:24]}')",
-            None,
-        )
-
-    # 2b. Biotech & Small/Mid-Cap (<$20B) Healthcare Blacklist
-    ind_lower = industry.lower()
-    sec_lower = sector.lower()
-    if "biotech" in ind_lower or "biotechnology" in ind_lower:
-        return (
-            False,
-            f"MODULE_2_BIOTECH_BLACKLIST (Industry='{industry}')",
-            None,
-        )
-    if ("health" in sec_lower or "health" in ind_lower or "drug" in ind_lower or "pharma" in ind_lower) and (
-        mcap < MIN_HEALTHCARE_MCAP_USD
-    ):
-        return (
-            False,
-            f"MODULE_2_HEALTHCARE_UNDER_20B (MarketCap=${mcap / 1e9:.2f}B < $20.0B Healthcare Floor)",
-            None,
-        )
-
-    # 2c. Financial Solvency Floor ($3B Market Cap + Positive OCF or Positive EBITDA)
-    if mcap < MIN_MARKET_CAP_USD:
-        return (
-            False,
-            f"MODULE_2_MCAP_BELOW_3B (MarketCap=${mcap / 1e9:.2f}B < $3.0B Floor)",
-            None,
-        )
-
-    ocf_val = float(ocf) if ocf is not None and not pd.isna(ocf) else 0.0
-    ebitda_val = float(ebitda) if ebitda is not None and not pd.isna(ebitda) else 0.0
-    if ocf_val <= 0 and ebitda_val <= 0:
-        return (
-            False,
-            f"MODULE_2_ZOMBIE_CASH_BURNER (OCF=${ocf_val / 1e6:.1f}M, EBITDA=${ebitda_val / 1e6:.1f}M <= 0)",
-            None,
-        )
-
-    # 2d. Falling Knife Defense (10d return >= -35% AND Close > SMA5 AND SMA5 > SMA5.shift(2))
-    if len(df) >= 11:
-        ret_10d = (close - float(df["Close"].iloc[-11])) / float(df["Close"].iloc[-11])
-        if ret_10d < MAX_10D_CRASH_PCT:
-            return (
-                False,
-                f"MODULE_2_10D_FALLING_KNIFE (10d Return={ret_10d * 100:.1f}% < -35.0% limit)",
-                None,
-            )
-
-    sma5_series = df["Close"].rolling(5).mean()
-    sma5_now = float(sma5_series.iloc[-1])
-    sma5_prev2 = float(sma5_series.iloc[-3])
-    if not (close > sma5_now and sma5_now > sma5_prev2):
-        return (
-            False,
-            f"MODULE_2_NO_CONFIRMED_BASE (Close=${close:.2f} vs SMA5=${sma5_now:.2f}, SMA5[-2]=${sma5_prev2:.2f})",
-            None,
-        )
-
-    # ==========================================================================
-    # MODULE 3: THE 3-STAGE REGIME & EARNINGS BLACKOUT SCREENER
-    # ==========================================================================
-    # Stage 1: Dislocation Depth (30d low >= 12.0% below 60d high)
-    high_60d = float(df["High"].iloc[-60:].max())
-    low_30d = float(df["Low"].iloc[-30:].min())
-    drawdown_60d = (low_30d - high_60d) / high_60d
-    if drawdown_60d > MIN_DISLOCATION_60D:
-        return (
-            False,
-            f"MODULE_3_INSUFFICIENT_DISLOCATION (60d DD={drawdown_60d * 100:.1f}% > -12.0% threshold)",
-            None,
-        )
-
-    # Stage 2: Volume Accumulation (>= 55% of trailing 5d volume on green days Close > Open)
-    last5 = df.iloc[-5:]
-    green_vol_5d = float(last5[last5["Close"] > last5["Open"]]["Volume"].sum())
-    total_vol_5d = float(last5["Volume"].sum())
-    vol_accum_ratio = (green_vol_5d / total_vol_5d) if total_vol_5d > 0 else 0.0
-    if vol_accum_ratio < MIN_5D_GREEN_VOL_RATIO:
-        return (
-            False,
-            f"MODULE_3_WEAK_5D_ACCUMULATION (5d Green Vol={vol_accum_ratio * 100:.1f}% < 55.0% floor)",
-            None,
-        )
-
-    # Stage 3: Automated 14-Day Pre-Earnings Corporate Buyback Blackout Check
-    _, in_er_blackout, next_er_str = resolve_next_earnings_date(sym, meta, ref_date)
-    if in_er_blackout:
-        return (
-            False,
-            f"MODULE_3_PRE_EARNINGS_14D_BLACKOUT (Next ER={next_er_str} within {ER_BLACKOUT_DAYS}d window)",
-            None,
-        )
-
-    # ==========================================================================
-    # MODULE 4: INSTITUTIONAL ACCUMULATION SCORE
-    # Score = Dislocation Depth (%) * Volume Accumulation Ratio * log10(Dollar Volume)
-    # ==========================================================================
-    dislocation_depth_pct = abs(drawdown_60d * 100.0)
-    score = dislocation_depth_pct * vol_accum_ratio * math.log10(med_dollar_vol_20d)
-
-    record = {
-        "Ticker": sym,
-        "Company": company_name[:28],
-        "Sector": (sector or "Commercial Services")[:22],
-        "Industry": (industry or "Financial/Tech Services")[:28],
-        "Price": round(close, 2),
-        "20d ADTV": int(round(adtv_20d)),
-        "MedDollarVol": round(med_dollar_vol_20d, 0),
-        "60d DD%": round(drawdown_60d * 100.0, 2),
-        "5d Vol Accum%": round(vol_accum_ratio * 100.0, 1),
-        "Next ER Date": next_er_str,
-        "Score": round(score, 2),
-    }
-    return True, "PASSED_ALL_GATES", record
-
-
-def run_autonomous_universe_scan(
-    top_n: int = 6,
-    verbose: bool = True,
-    save_cache: bool = True,
-) -> dict[str, Any]:
-    """
-    Executes the full 4-Module Autonomous Discovery Funnel across the US equity universe,
-    verifies every surviving candidate against `yf.Ticker(t).info` and daily price/volume
-    history, caches the Top 6 highest-scoring candidates to `discovered_candidates.json`,
-    and prints the verified table and rejection audit log.
-    """
-    est_tz = pytz.timezone("US/Eastern")
-    now_est = datetime.now(est_tz)
-    t_hm = now_est.hour * 100 + now_est.minute
-    is_rth_open = (now_est.weekday() < 5) and (930 <= t_hm <= 1600)
-
-    universe_meta = fetch_broad_us_universe(max_rows=550)
-    all_syms = list(universe_meta.keys())
-
-    # Batch download 6mo daily OHLCV history from Yahoo Finance
-    df_all = yf.download(
-        tickers=all_syms,
-        period="6mo",
+    raw_daily = yf.download(
+        pool,
+        period="3mo",
         interval="1d",
         group_by="ticker",
         progress=False,
         threads=True,
     )
 
-    # Determine reference session date from SPY or latest market bar
-    ref_date = now_est.date()
-    try:
-        if "FISV" in df_all and not df_all["FISV"].dropna(how="all").empty:
-            ref_date = df_all["FISV"].dropna(how="all").index[-1].date()
-    except Exception:
-        pass
-
-    survivors: list[dict[str, Any]] = []
-    rejection_counts: dict[str, int] = {}
-    sample_rejections: list[tuple[str, str]] = []
-
-    # First pass: evaluate all 540+ equities and enrich AUDIT_PROBE_TICKERS via yf.Ticker(sym).info
-    prelim_survivors: list[tuple[str, pd.DataFrame, dict[str, Any]]] = []
-    for sym in all_syms:
+    stage2_PreCandidates: List[Dict[str, Any]] = []
+    for sym in pool:
         try:
-            sub = (
-                df_all[sym].dropna(how="all")
-                if isinstance(df_all.columns, pd.MultiIndex)
-                else df_all.dropna(how="all")
-            )
+            df = raw_daily[sym].dropna(how="all") if len(pool) > 1 else raw_daily.dropna(how="all")
+            if df.empty or len(df) < 35:
+                rejection_reasons[sym] = "REJECTED_INSUFFICIENT_DAILY_BARS"
+                continue
+
+            last_close = float(df["Close"].iloc[-1])
+            if last_close < exec_cfg.min_share_price or last_close > exec_cfg.max_share_price:
+                rejection_reasons[sym] = f"REJECTED_PRICE_OUT_OF_RANGE (${last_close:.2f})"
+                continue
+
+            adtv_20d = float(df["Volume"].tail(20).mean())
+            if adtv_20d < 1_000_000:
+                rejection_reasons[sym] = f"REJECTED_LOW_ADTV ({adtv_20d:,.0f} < 1M)"
+                continue
+
+            dol_vol_med = float((df["Volume"] * df["Close"]).tail(20).median())
+            if dol_vol_med < 50_000_000:
+                rejection_reasons[sym] = f"REJECTED_LOW_DOLLAR_VOL (${dol_vol_med/1e6:.1f}M < $50M)"
+                continue
+
+            ret_3d = (last_close - float(df["Close"].iloc[-4])) / float(df["Close"].iloc[-4])
+            if ret_3d <= -0.10:
+                rejection_reasons[sym] = f"REJECTED_3D_WATERFALL ({ret_3d*100:.1f}%)"
+                continue
+
+            tr0 = abs(df["High"] - df["Low"])
+            tr1 = abs(df["High"] - df["Close"].shift(1))
+            tr2 = abs(df["Low"] - df["Close"].shift(1))
+            tr = pd.concat([tr0, tr1, tr2], axis=1).max(axis=1)
+            atr_14 = float(tr.rolling(14).mean().iloc[-1])
+            atr_pct = atr_14 / last_close
+            if atr_pct > cfg.accum_max_atr_pct:
+                rejection_reasons[sym] = f"REJECTED_HIGH_ATR ({atr_pct*100:.2f}% > 4.5%)"
+                continue
+
+            higher_low = (df["Low"] >= df["Low"].shift(1) * 0.998).astype(int)
+            hl_10d = int(higher_low.tail(10).sum())
+            vol_10d = float(df["Volume"].tail(10).mean())
+            vol_20d = float(df["Volume"].tail(20).mean())
+            vol_ratio = vol_10d / vol_20d if vol_20d > 0 else 0.0
+
+            high_50d = float(df["High"].tail(50).max())
+            low_50d = float(df["Low"].tail(50).min())
+            close_pos_50d = (last_close - low_50d) / max(high_50d - low_50d, 1e-6)
+
+            if hl_10d < cfg.accum_min_higher_lows:
+                rejection_reasons[sym] = f"REJECTED_LOW_HL_COUNT ({hl_10d}/10 < 6)"
+                continue
+            if vol_ratio < cfg.accum_min_vol_ratio:
+                rejection_reasons[sym] = f"REJECTED_LOW_VOL_RATIO ({vol_ratio:.2f}x < 1.0x)"
+                continue
+            if close_pos_50d > 0.70:
+                rejection_reasons[sym] = f"REJECTED_NEAR_50D_HIGH ({close_pos_50d*100:.0f}% > 70%)"
+                continue
+
+            c_dict = {
+                "Ticker": sym,
+                "Price": round(last_close, 2),
+                "ADTV_M": round(adtv_20d / 1e6, 2),
+                "DolVol_M": round(dol_vol_med / 1e6, 1),
+                "ATR_Pct": round(atr_pct, 4),
+                "HL_10d": hl_10d,
+                "Vol_Ratio": round(vol_ratio, 2),
+                "Close_50d_Pct": round(close_pos_50d * 100.0, 1),
+            }
+            c_dict["Score"] = compute_heuristic_discovery_score(c_dict)
+            stage2_PreCandidates.append(c_dict)
+        except Exception as exc:
+            rejection_reasons[sym] = f"ERROR ({exc})"
+
+    # Sort pre-candidates by heuristic score descending and deep-validate until we have `max_candidates` verified survivors
+    stage2_PreCandidates.sort(key=lambda x: (-x["Score"], x["Ticker"]))
+
+    verified_survivors: List[Dict[str, Any]] = []
+    for cand in stage2_PreCandidates:
+        sym = cand["Ticker"]
+        try:
+            info = yf.Ticker(sym).info or {}
         except Exception:
-            sub = pd.DataFrame()
+            info = {}
 
-        meta = (
-            enrich_with_yfinance_info(sym, universe_meta.get(sym, {}), is_rth_open=is_rth_open)
-            if sym in AUDIT_PROBE_TICKERS
-            else universe_meta.get(sym, {})
+        passed, meta, reject_reason = deep_validate_candidate(
+            symbol=sym,
+            info=info,
+            as_of_date=now_ny.date(),
+            is_rth=is_rth,
+            oracle=er_oracle,
+            cfg=cfg,
+            exec_cfg=exec_cfg,
         )
+        if not passed:
+            rejection_reasons[sym] = reject_reason or "REJECTED_DEEP_VALIDATION"
+            continue
 
-        passed, reason, rec = evaluate_candidate_gates(sym, sub, meta, ref_date=ref_date)
-        if passed and rec is not None:
-            prelim_survivors.append((sym, sub, rec))
-        else:
-            bucket = reason.split(" ")[0]
-            rejection_counts[bucket] = rejection_counts.get(bucket, 0) + 1
-            if sym in AUDIT_PROBE_TICKERS:
-                sample_rejections.append((sym, reason))
+        cand.update(meta)
+        verified_survivors.append(cand)
+        if len(verified_survivors) >= max_candidates:
+            break
 
-    # Second pass: deep yf.Ticker(sym).info verification on top 15 preliminary survivors
-    prelim_survivors.sort(key=lambda x: x[2]["Score"], reverse=True)
-    for idx, (sym, sub, rec) in enumerate(prelim_survivors):
-        if idx < 15 and sym not in AUDIT_PROBE_TICKERS:
-            deep_meta = enrich_with_yfinance_info(sym, universe_meta.get(sym, {}), is_rth_open=is_rth_open)
-            passed2, reason2, rec2 = evaluate_candidate_gates(sym, sub, deep_meta, ref_date=ref_date)
-            if passed2 and rec2 is not None:
-                survivors.append(rec2)
-            else:
-                bucket = reason2.split(" ")[0]
-                rejection_counts[bucket] = rejection_counts.get(bucket, 0) + 1
-                sample_rejections.append((sym, reason2))
-        else:
-            survivors.append(rec)
+    final_df = rank_and_filter_candidates(verified_survivors)
 
-    # Also run explicit Spread Sanity Gate test case to prove Module 1 spread blocking
-    spread_ok, spread_reason, _ = evaluate_candidate_gates(
-        "ILLIQ_SPREAD_TEST",
-        df_all["FISV"].dropna(how="all") if isinstance(df_all.columns, pd.MultiIndex) else pd.DataFrame(),
-        universe_meta.get("FISV", {}),
-        ref_date=ref_date,
-        quote_bid=63.40,
-        quote_ask=63.52,  # $0.12 spread (0.189% > 0.08% max spread cap)
-    )
-    if not spread_ok:
-        rejection_counts["MODULE_1_WIDE_BID_ASK_SPREAD"] = (
-            rejection_counts.get("MODULE_1_WIDE_BID_ASK_SPREAD", 0) + 1
-        )
-        sample_rejections.append(("SPREAD_TRAP ($63.40x$63.52)", spread_reason))
+    if save_json:
+        order_eligible_tickers = final_df["Ticker"].tolist() if not final_df.empty else []
+        out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discovered_candidates.json")
+        snapshot_payload = {
+            "schema_version": "v6.0-audited",
+            "generated_at_et": now_ny.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "data_cutoff_ts": now_ny.isoformat(),
+            "effective_session_date": now_ny.date().isoformat(),
+            "is_regular_trading_hours_scan": is_rth,
+            "config_sha256": cfg.config_sha256(),
+            "selection_rules": {
+                "price_range_usd": [exec_cfg.min_share_price, exec_cfg.max_share_price],
+                "min_adtv_20d": 1_000_000,
+                "min_median_dollar_vol_20d": 50_000_000,
+                "max_atr_pct": cfg.accum_max_atr_pct,
+                "min_hl_10d": cfg.accum_min_higher_lows,
+                "min_vol_ratio_10d_20d": cfg.accum_min_vol_ratio,
+                "max_50d_range_pct": 70.0,
+                "er_blackout_days": cfg.er_blackout_calendar_days,
+                "er_unknown_policy": cfg.er_unknown_policy,
+            },
+            "core_monitored_tickers": list(CORE_MONITORED_TICKERS),
+            "order_eligible_tickers": order_eligible_tickers,
+            "selected_candidates": final_df.to_dict(orient="records") if not final_df.empty else [],
+            "rejected_count": len(rejection_reasons),
+            "rejection_reasons_sample": dict(list(rejection_reasons.items())[:50]),
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot_payload, f, indent=2)
 
-    survivors_df = pd.DataFrame(survivors).sort_values("Score", ascending=False).reset_index(drop=True)
-    top_df = survivors_df.head(top_n).copy()
-    top_tickers = list(top_df["Ticker"].values) if not top_df.empty else []
-
-    # Merge Core Verified Tickers (['FISV', 'PLNT', 'EEFT']) + Top 6 Dynamic Discoveries
-    merged_universe: list[str] = []
-    for t in CORE_VERIFIED_TICKERS + top_tickers:
-        if t not in merged_universe:
-            merged_universe.append(t)
-
-    cache_payload = {
-        "generated_at_est": now_est.strftime("%Y-%m-%d %H:%M:%S EST"),
-        "session_date": str(ref_date),
-        "expires_on_date": str(ref_date + timedelta(days=1)),
-        "core_verified_tickers": CORE_VERIFIED_TICKERS,
-        "top_dynamic_tickers": top_tickers,
-        "merged_hud_universe": merged_universe,
-        "top_candidates": top_df.to_dict(orient="records"),
-        "total_scanned": len(all_syms),
-        "total_survivors": len(survivors_df),
-        "rejection_summary": rejection_counts,
-    }
-
-    if save_cache:
-        CACHE_FILE_PATH.write_text(json.dumps(cache_payload, indent=2))
-
-    if verbose:
-        print("=" * 124)
-        print(
-            f"🛰️  V5 AUTONOMOUS UNIVERSE SCANNER & DISCOVERY FUNNEL  |  "
-            f"SESSION DATE: {ref_date}  |  SCANNED: {len(all_syms)} US EQUITIES"
-        )
-        print("=" * 124)
-        print("🛡️  PROGRAMMATIC GATE REJECTION AUDIT (100% AUTOMATED FILTERING):")
-        for gate_key, cnt in sorted(rejection_counts.items()):
-            print(f"   • {gate_key:<36s} : {cnt:>3d} tickers rejected")
-        print("-" * 124)
-        print("🔬 VERIFIED BLOCKED PROBE EXAMPLES (BIOTECH / ADR / LOW-VOL / ZOMBIE / ER BLACKOUT / SPREAD):")
-        for p_sym, p_reason in sample_rejections:
-            print(f"   ❌ {p_sym:<26s} -> BLOCKED: {p_reason}")
-        print("=" * 124)
-        print(f"🏆 TOP {top_n} HIGHEST-SCORING INSTITUTIONAL ACCUMULATION CANDIDATES (OUT OF {len(survivors_df)} SURVIVORS):")
-        print("-" * 124)
-        if not top_df.empty:
-            disp = top_df[
-                [
-                    "Ticker",
-                    "Company",
-                    "Sector",
-                    "Price",
-                    "20d ADTV",
-                    "60d DD%",
-                    "5d Vol Accum%",
-                    "Next ER Date",
-                    "Score",
-                ]
-            ].copy()
-            disp["Price"] = disp["Price"].map(lambda x: f"${x:.2f}")
-            disp["20d ADTV"] = disp["20d ADTV"].map(lambda x: f"{x:,}")
-            disp["60d DD%"] = disp["60d DD%"].map(lambda x: f"{x:+.2f}%")
-            disp["5d Vol Accum%"] = disp["5d Vol Accum%"].map(lambda x: f"{x:.1f}%")
-            disp["Score"] = disp["Score"].map(lambda x: f"{x:.2f}")
-            print(disp.to_string(index=False))
-        print("-" * 124)
-        print(f"💾 Cached Top {len(top_tickers)} discoveries to: {CACHE_FILE_PATH}")
-        print(f"🔗 Merged HUD Universe (Core + Dynamic): {merged_universe}")
-        print("=" * 124)
-
-    return cache_payload
+    return final_df
 
 
-def get_or_refresh_dynamic_universe(
-    core_tickers: Optional[list[str]] = None,
-    force_refresh: bool = False,
-    verbose: bool = True,
-) -> list[str]:
+def load_discovered_universe(
+    include_core_monitored: bool = False,
+    require_order_eligible: bool = True,
+) -> List[str]:
     """
-    Used by `test_regimes.py --watch --dynamic` / `--live --dynamic`:
-    Checks if `discovered_candidates.json` exists and matches the current calendar session date.
-    If missing or stale (generated on a prior calendar date), automatically triggers
-    `run_autonomous_universe_scan()` to refresh the cache before opening the HUD, then
-    merges `['FISV', 'PLNT', 'EEFT']` with the top dynamic discoveries.
+    Load the discovered universe from `discovered_candidates.json`.
+    Keeps `core_monitored_tickers` distinct from `order_eligible_tickers`.
     """
-    base_core = core_tickers if core_tickers is not None else list(CORE_VERIFIED_TICKERS)
-    est_tz = pytz.timezone("US/Eastern")
-    today_str = str(datetime.now(est_tz).date())
-
-    if not force_refresh and CACHE_FILE_PATH.exists():
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discovered_candidates.json")
+    if os.path.exists(json_path):
         try:
-            cached = json.loads(CACHE_FILE_PATH.read_text())
-            cached_gen_date = str(cached.get("generated_at_est", ""))[:10]
-            cached_sess_date = str(cached.get("session_date", ""))
-            if cached_gen_date == today_str or cached_sess_date == today_str:
-                top_dyn = cached.get("top_dynamic_tickers", [])
-                merged = []
-                for t in base_core + top_dyn:
-                    if t not in merged:
-                        merged.append(t)
-                if verbose:
-                    print(
-                        f"✅ [DYNAMIC UNIVERSE CACHE VALID ({cached_gen_date})] "
-                        f"Core {base_core} + Dynamic {top_dyn} -> {merged}"
-                    )
-                return merged
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if require_order_eligible and "order_eligible_tickers" in data:
+                eligible = list(data.get("order_eligible_tickers", []))
+            else:
+                eligible = [c["Ticker"] for c in data.get("selected_candidates", []) if "Ticker" in c]
+
+            if include_core_monitored:
+                combined = list(CORE_MONITORED_TICKERS) + [t for t in eligible if t not in CORE_MONITORED_TICKERS]
+                return combined
+            return eligible
         except Exception:
             pass
-
-    if verbose:
-        print("🔄 [DYNAMIC UNIVERSE CACHE MISSING OR STALE] Running autonomous universe_scanner.py refresh...")
-    payload = run_autonomous_universe_scan(top_n=6, verbose=verbose, save_cache=True)
-    top_dyn = payload.get("top_dynamic_tickers", [])
-    merged = []
-    for t in base_core + top_dyn:
-        if t not in merged:
-            merged.append(t)
-    return merged
+    return list(CORE_MONITORED_TICKERS) if include_core_monitored else []
 
 
 if __name__ == "__main__":
-    run_autonomous_universe_scan(top_n=6, verbose=True, save_cache=True)
+    parser = argparse.ArgumentParser(description="Audited V6 Dynamic Universe Discovery Funnel")
+    parser.add_argument("--scan-universe", action="store_true", help="Run full autonomous discovery funnel")
+    parser.add_argument("--max-candidates", type=int, default=8, help="Max order-eligible candidates to select")
+    args = parser.parse_args()
+    df_out = run_autonomous_discovery_funnel(max_candidates=args.max_candidates, save_json=True)
+    if df_out.empty:
+        print("No candidates passed all gates for the current snapshot.")
+    else:
+        print(df_out.to_string(index=False))
