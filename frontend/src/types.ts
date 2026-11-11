@@ -476,3 +476,224 @@ export interface NvdaMonitorState {
   signals?: NvdaSignal[];
   events?: NvdaEvent[];
 }
+
+// ==================== WHOLE MARKET MULTI-STRATEGY SCANNER & AUDIT TYPES ====================
+
+export interface WholeMarketGate {
+  name: string;
+  pass: boolean;
+  observed: string;
+  required: string;
+}
+
+export interface WholeMarketCandidate {
+  id: string;
+  sleeve_id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  sleeve_short_name: string;
+  direction: 'LONG' | 'SHORT';
+  status:
+    | 'SIGNAL_ACTIVE'
+    | 'MORNING_COHORT_LIVE'
+    | 'FORMING_IN_WINDOW'
+    | 'PRE_3PM_WATCH'
+    | 'NEAR_TRIGGER_WATCH';
+  sort_score: number;
+  cohort_rank: number;
+  in_top_cohort: boolean;
+  symbol: string;
+  name: string;
+  guild: string;
+  sector: string;
+  industry: string;
+  adtv20_usd: number;
+  prev_close: number;
+  open: number;
+  high: number;
+  low: number;
+  last: number;
+  day_chg_pct: number;
+  gap_pct: number;
+  ibs: number;
+  pace_rvol: number;
+  sigma20_pct: number;
+  beta_spy: number;
+  primary_label: string;
+  secondary_label: string;
+  metric_value: number;
+  ref_price: number;
+  stop_price: number;
+  shares: number;
+  notional_usd: number;
+  hedge_side: 'BUY' | 'SHORT' | 'NONE';
+  spy_hedge_shares: number;
+  rt_cost_bps: number;
+  live_mtm_bps: number | null;
+  live_mtm_usd: number | null;
+  catalyst_warning?: boolean;
+  stopped_out?: boolean;
+  entry_bell: string;
+  exit_bell: string;
+  gates: WholeMarketGate[];
+  copy_ticket: string;
+}
+
+export interface WholeMarketSleeveSummary {
+  id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  name: string;
+  short_name: string;
+  weight: number;
+  max_positions: number;
+  direction: 'LONG' | 'SHORT';
+  hedge_mode: string;
+  entry_bell: string;
+  exit_bell: string;
+  window_kind: string;
+  audited_sharpe: number;
+  audited_t: number;
+  audited_net_bps: number;
+  sleeve_capital_usd: number;
+  qualifying_count: number;
+  cohort_selected_count: number;
+  near_count: number;
+  today_cohort_mtm_bps: number | null;
+}
+
+export interface WholeMarketScanPayload {
+  ok: boolean;
+  fetched_at_et: string;
+  feed_mode: string;
+  scan_latency_ms: number;
+  as_of_prior_session: string;
+  total_audited_universe: number;
+  live_scanner_universe_count: number;
+  quotes_received: number;
+  book_capital_usd: number;
+  market_window: {
+    phase: string;
+    badge: string;
+    active_bells: string;
+    guidance: string;
+  };
+  p1500_anchor_locked: boolean;
+  spy: {
+    symbol: string;
+    prev_close: number;
+    open: number;
+    high: number;
+    low: number;
+    last: number;
+    p1500: number | null;
+    day_chg_pct: number;
+    intraday_chg_pct: number;
+  };
+  sleeves: WholeMarketSleeveSummary[];
+  candidates: WholeMarketCandidate[];
+  near_candidates: WholeMarketCandidate[];
+  total_active_or_forming: number;
+}
+
+export interface WholeMarketAuditStrategy {
+  id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  name: string;
+  short_name: string;
+  weight_pct: number;
+  direction: string;
+  clock_window: string;
+  holding_period: string;
+  universe_rule: string;
+  signal_rule: string;
+  hedge_rule: string;
+  structural_why: string;
+  trades: number;
+  active_days: number;
+  gross_bps: number;
+  cost_bps: number;
+  net_bps: number;
+  win_rate_pct: number;
+  train_t: number;
+  oos_t: number;
+  full_t: number;
+  sharpe: number;
+  ex_top3_tickers_sharpe: number;
+  ex_top3_days_sharpe: number;
+  friction_2x_sharpe: number;
+  placebo_note: string;
+  recent_trades: Array<{
+    date: string;
+    symbol: string;
+    entry_px: number;
+    metric: number;
+    gross_bps: number;
+    net_bps: number;
+  }>;
+}
+
+export interface WholeMarketAuditSummary {
+  generated_at: string;
+  overview: {
+    total_specs_tested: number;
+    surviving_specs: number;
+    rejected_specs: number;
+    daily_universe_tickers: number;
+    daily_stock_days: number;
+    intraday_5m_60d_tickers: number;
+    intraday_5m_1y_tickers: number;
+    deflated_sharpe_ratio: number;
+    deflated_sharpe_pvalue: string;
+    mean_pairwise_corr: number;
+  };
+  portfolio_windows: Array<{
+    label: string;
+    days: number;
+    compounded_return_pct: number;
+    sharpe: number;
+    daily_t_stat: number;
+    max_drawdown_pct: number;
+    winning_months_pct: number;
+  }>;
+  strategies: WholeMarketAuditStrategy[];
+  correlation_matrix: Record<string, Record<string, number>>;
+  monthly_returns: Array<{
+    month: string;
+    port: number;
+    s1: number;
+    s2: number;
+    s3: number;
+    s4: number;
+    s5: number;
+  }>;
+  equity_curve: Array<{
+    date: string;
+    port: number;
+    s1: number;
+    s2: number;
+    s3: number;
+    s4: number;
+    s5: number;
+    dd_pct: number;
+  }>;
+  sls_case_study: {
+    symbol: string;
+    company: string;
+    cik: string;
+    filing: string;
+    ocf_ttm_usd: number;
+    days_audited_5m: number;
+    dip_150bps_freq_pct: number;
+    reclaim_open_win_rate_pct: number;
+    capped_target_net_bps: number;
+    hold_to_close_net_bps: number;
+    reg_nms_tick_drag_bps: number;
+    broad_habit_train_gross_bps: number;
+    broad_habit_oos_net_bps: number;
+    verdict: string;
+  };
+  graveyard: Array<{
+    family: string;
+    specs_tested: number;
+    gross_bps: number;
+    net_bps: number;
+    oos_t: number;
+    why_failed: string;
+  }>;
+}

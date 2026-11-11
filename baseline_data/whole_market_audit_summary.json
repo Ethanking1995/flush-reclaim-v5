@@ -1,0 +1,3573 @@
+{
+  "generated_at": "2026-11-11",
+  "overview": {
+    "total_specs_tested": 10526,
+    "surviving_specs": 5,
+    "rejected_specs": 10521,
+    "daily_universe_tickers": 4688,
+    "daily_stock_days": 2261598,
+    "intraday_5m_60d_tickers": 1547,
+    "intraday_5m_1y_tickers": 262,
+    "deflated_sharpe_ratio": 1.0,
+    "deflated_sharpe_pvalue": "< 1e-6",
+    "mean_pairwise_corr": 0.024
+  },
+  "portfolio_windows": [
+    {
+      "label": "Trailing 1-Year (Oct 2025 \u2013 Nov 2026 \u00b7 All 5 Sleeves Live)",
+      "days": 265,
+      "compounded_return_pct": 56.1,
+      "sharpe": 5.11,
+      "daily_t_stat": 5.25,
+      "max_drawdown_pct": -2.07,
+      "winning_months_pct": 100.0
+    },
+    {
+      "label": "Strict 2026 Out-of-Sample (Jan 2026 \u2013 Nov 2026)",
+      "days": 215,
+      "compounded_return_pct": 47.6,
+      "sharpe": 5.5,
+      "daily_t_stat": 5.09,
+      "max_drawdown_pct": -1.82,
+      "winning_months_pct": 100.0
+    },
+    {
+      "label": "Full 2025\u20132026 Sample (Jan 2025 \u2013 Nov 2026)",
+      "days": 465,
+      "compounded_return_pct": 85.4,
+      "sharpe": 4.53,
+      "daily_t_stat": 6.16,
+      "max_drawdown_pct": -2.14,
+      "winning_months_pct": 95.7
+    }
+  ],
+  "strategies": [
+    {
+      "id": "S1",
+      "name": "Bounded Non-PEAD Weak-Trend Gap-Up Short",
+      "short_name": "Weak-Trend Gap Short",
+      "weight_pct": 25,
+      "direction": "SHORT_BETA_HEDGED",
+      "clock_window": "09:30 Open \u2192 15:55\u201316:00 Close",
+      "holding_period": "Intraday RTH (~6.5h)",
+      "universe_rule": "US Common Stock, OCF_TTM > $0, Price \u2265 $15, 20d ADTV \u2265 $10M (ETB)",
+      "signal_rule": "Open < SMA20 AND +1.30 \u2264 z_gap \u2264 +2.80 (rejects > +2.8\u03c3 PEAD/M&A beats); +6% stop",
+      "hedge_rule": "Buy \u03b2_20d \u00d7 Notional in SPY at 09:30; flatten both at Close",
+      "structural_why": "Retail overnight limit-buy orders chase headlines into structurally broken charts (Open < SMA20), while institutional Execution-Shortfall VWAP sell programs wait for RTH depth to distribute.",
+      "trades": 1354,
+      "active_days": 332,
+      "gross_bps": 80.5,
+      "cost_bps": 17.7,
+      "net_bps": 62.7,
+      "win_rate_pct": 59.4,
+      "train_t": 3.01,
+      "oos_t": 3.21,
+      "full_t": 4.39,
+      "sharpe": 3.21,
+      "ex_top3_tickers_sharpe": 2.98,
+      "ex_top3_days_sharpe": 2.84,
+      "friction_2x_sharpe": 1.98,
+      "placebo_note": "Gaps > +3.5\u03c3 (true earnings/M&A PEAD) reverse sign and lose money to short; bounding z_gap \u2264 +2.8\u03c3 isolates non-news retail overreaction.",
+      "recent_trades": [
+        {
+          "date": "2026-11-09",
+          "symbol": "HBM",
+          "entry_px": 21.93,
+          "metric": 1.332,
+          "gross_bps": -73.7,
+          "net_bps": -92.2
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "CEG",
+          "entry_px": 260.4,
+          "metric": 1.349,
+          "gross_bps": -536.1,
+          "net_bps": -548.7
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "SCCO",
+          "entry_px": 174.87,
+          "metric": 1.475,
+          "gross_bps": 179.6,
+          "net_bps": 165.9
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "FCX",
+          "entry_px": 61.81,
+          "metric": 1.477,
+          "gross_bps": 156.3,
+          "net_bps": 143.4
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "UTI",
+          "entry_px": 21.0,
+          "metric": 1.48,
+          "gross_bps": -174.2,
+          "net_bps": -196.0
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "VIRT",
+          "entry_px": 55.1,
+          "metric": 1.693,
+          "gross_bps": -243.3,
+          "net_bps": -259.7
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "DSGR",
+          "entry_px": 35.0,
+          "metric": 2.412,
+          "gross_bps": 43.2,
+          "net_bps": 19.2
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "META",
+          "entry_px": 631.05,
+          "metric": 1.346,
+          "gross_bps": -16.9,
+          "net_bps": -28.7
+        },
+        {
+          "date": "2026-11-06",
+          "symbol": "SITM",
+          "entry_px": 405.85,
+          "metric": 2.531,
+          "gross_bps": -258.7,
+          "net_bps": -272.1
+        },
+        {
+          "date": "2026-11-06",
+          "symbol": "AMR",
+          "entry_px": 155.51,
+          "metric": 2.757,
+          "gross_bps": 495.0,
+          "net_bps": 478.1
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "name": "SEC Rule 10b-18 Buyback-Shutoff / MOC Vacuum",
+      "short_name": "Rule 10b-18 MOC Vacuum",
+      "weight_pct": 25,
+      "direction": "LONG_BETA_HEDGED",
+      "clock_window": "15:55 Close \u2192 Next Day 10:00 AM",
+      "holding_period": "Overnight + 30m RTH (~18h)",
+      "universe_rule": "Large/Mega-Cap ($10B+), OCF_TTM > $0, Price \u2265 $20, 20d ADTV \u2265 $20M",
+      "signal_rule": "|r_0930_1500 \u2212 SPY| \u2264 1.5% (quiet pre-3PM) AND (r_1500_1555 \u2212 SPY) \u2264 -1.5%",
+      "hedge_rule": "Short 1.0 \u00d7 Notional in SPY at 15:55; unwind both next day at 10:00 AM ET",
+      "structural_why": "SEC Rule 10b-18(b)(2)(ii) forces corporate buyback desks to pull bids during the final 10\u201330m of RTH just as passive/risk-parity MOC sells hit, creating an artificial air-pocket that snaps back when 10b-18 bids turn back on at 09:35\u201310:00 AM.",
+      "trades": 92,
+      "active_days": 57,
+      "gross_bps": 179.5,
+      "cost_bps": 9.2,
+      "net_bps": 170.2,
+      "win_rate_pct": 59.8,
+      "train_t": 1.66,
+      "oos_t": 1.94,
+      "full_t": 2.53,
+      "sharpe": 2.45,
+      "ex_top3_tickers_sharpe": 1.91,
+      "ex_top3_days_sharpe": 1.61,
+      "friction_2x_sharpe": 2.24,
+      "placebo_note": "Exact same 15:00\u201315:55 drop on non-buyback small-caps / cash-burners delivers -15.3 bps/trade (t = -0.59) \u2014 proving corporate Rule 10b-18 buyback resumption is the causal engine.",
+      "recent_trades": [
+        {
+          "date": "2026-11-05",
+          "symbol": "AVGO",
+          "entry_px": 290.36,
+          "metric": -0.019,
+          "gross_bps": 383.5,
+          "net_bps": 374.6
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "INTC",
+          "entry_px": 52.19,
+          "metric": -0.034,
+          "gross_bps": 671.8,
+          "net_bps": 662.7
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "KLAC",
+          "entry_px": 129.67,
+          "metric": -0.037,
+          "gross_bps": 737.3,
+          "net_bps": 728.1
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "HPE",
+          "entry_px": 44.08,
+          "metric": -0.026,
+          "gross_bps": 372.7,
+          "net_bps": 362.4
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "TXN",
+          "entry_px": 278.35,
+          "metric": -0.027,
+          "gross_bps": -121.9,
+          "net_bps": -131.1
+        },
+        {
+          "date": "2026-10-23",
+          "symbol": "CRWV",
+          "entry_px": 54.28,
+          "metric": -0.016,
+          "gross_bps": -221.6,
+          "net_bps": -231.1
+        },
+        {
+          "date": "2026-10-13",
+          "symbol": "INTU",
+          "entry_px": 301.34,
+          "metric": -0.026,
+          "gross_bps": 317.0,
+          "net_bps": 307.4
+        },
+        {
+          "date": "2026-09-23",
+          "symbol": "CRWV",
+          "entry_px": 86.8,
+          "metric": -0.016,
+          "gross_bps": 97.3,
+          "net_bps": 88.1
+        },
+        {
+          "date": "2026-09-22",
+          "symbol": "MPC",
+          "entry_px": 389.69,
+          "metric": -0.016,
+          "gross_bps": 169.0,
+          "net_bps": 159.5
+        },
+        {
+          "date": "2026-09-22",
+          "symbol": "VLO",
+          "entry_px": 377.16,
+          "metric": -0.024,
+          "gross_bps": 218.7,
+          "net_bps": 209.2
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "name": "2x/3x Leveraged ETP Constant-Leverage 15:55 Washout",
+      "short_name": "Lev-ETP 15:55 Washout",
+      "weight_pct": 20,
+      "direction": "LONG_UNHEDGED",
+      "clock_window": "15:55 Close \u2192 Next Day 09:30 Open",
+      "holding_period": "Pure Overnight (0 Intraday Risk)",
+      "universe_rule": "Liquid 2x/3x Single-Stock & Sector Leveraged ETPs (20d ADTV \u2265 $15M)",
+      "signal_rule": "z1d_c \u2264 -1.50\u03c3 AND IBS \u2264 0.15 (pinned in bottom 15% of day's range at 15:55)",
+      "hedge_rule": "Unhedged overnight rebound capture; exit strictly at 09:30\u201309:35 AM Open",
+      "structural_why": "Constant-leverage ETP swap desks have structural negative gamma (\u0394Rebal = L(L-1)\u00b7AUM\u00b7r) and are contractually forced to dump underlying delta into 15:50\u201316:00 NAV fixings on trend down-days.",
+      "trades": 1184,
+      "active_days": 352,
+      "gross_bps": 43.9,
+      "cost_bps": 13.1,
+      "net_bps": 30.8,
+      "win_rate_pct": 51.3,
+      "train_t": 1.66,
+      "oos_t": 2.13,
+      "full_t": 2.65,
+      "sharpe": 1.95,
+      "ex_top3_tickers_sharpe": 1.62,
+      "ex_top3_days_sharpe": 1.48,
+      "friction_2x_sharpe": 1.38,
+      "placebo_note": "Only fires when crushed into the final bell (IBS \u2264 0.15); midday ETP dips without 15:55 rebalance pressure show zero edge.",
+      "recent_trades": [
+        {
+          "date": "2026-11-09",
+          "symbol": "PLTZ",
+          "entry_px": 9.72,
+          "metric": -1.511,
+          "gross_bps": 160.2,
+          "net_bps": 136.8
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "SOXS",
+          "entry_px": 67.79,
+          "metric": -1.67,
+          "gross_bps": 558.5,
+          "net_bps": 552.6
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "QID",
+          "entry_px": 16.19,
+          "metric": -1.712,
+          "gross_bps": 195.1,
+          "net_bps": 182.2
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "UUP",
+          "entry_px": 29.02,
+          "metric": -1.757,
+          "gross_bps": 38.0,
+          "net_bps": 25.3
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "SPDN",
+          "entry_px": 8.75,
+          "metric": -1.998,
+          "gross_bps": 69.6,
+          "net_bps": 49.9
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "DAMD",
+          "entry_px": 11.5,
+          "metric": -2.04,
+          "gross_bps": 253.7,
+          "net_bps": 231.8
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "SSO",
+          "entry_px": 69.36,
+          "metric": -5.399,
+          "gross_bps": 42.5,
+          "net_bps": 35.6
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "UPRO",
+          "entry_px": 146.48,
+          "metric": -5.397,
+          "gross_bps": 60.2,
+          "net_bps": 53.3
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "SPXL",
+          "entry_px": 280.38,
+          "metric": -5.377,
+          "gross_bps": 47.4,
+          "net_bps": 40.8
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "TSMX",
+          "entry_px": 60.46,
+          "metric": -4.628,
+          "gross_bps": 1630.3,
+          "net_bps": 1619.5
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "name": "Biotech $5+ Bounded Non-News Stop-Run Gap Reversal",
+      "short_name": "Biotech Stop-Run Long",
+      "weight_pct": 10,
+      "direction": "LONG_BETA_HEDGED",
+      "clock_window": "09:30 Open \u2192 15:55\u201316:00 Close",
+      "holding_period": "Intraday RTH (~6.5h)",
+      "universe_rule": "BIOTECH_BURNER (OCF_TTM < $0), Open \u2265 $5.00, 20d ADTV \u2265 $2.0M",
+      "signal_rule": "prev_rvol \u2264 1.5x AND -3.00 \u2264 ind_gap_z \u2264 -1.20 (excludes < -3\u03c3 clinical/S-3 crashes); -10% stop",
+      "hedge_rule": "Short \u03b2_20d \u00d7 Notional in SPY at 09:30; cap clip \u2264 0.5% ADTV; exit Close",
+      "structural_why": "Thin premarket books in $5+ institutional biotechs let tiny retail/margin stop-runs gap shares down -4% to -9% with zero press release; specialist pods refill the vacuum once RTH opens, whereas < -3\u03c3 gaps are toxic Phase 3 failures or overnight ATM offerings.",
+      "trades": 274,
+      "active_days": 187,
+      "gross_bps": 196.5,
+      "cost_bps": 23.9,
+      "net_bps": 172.6,
+      "win_rate_pct": 62.4,
+      "train_t": 2.4,
+      "oos_t": 1.94,
+      "full_t": 3.07,
+      "sharpe": 2.23,
+      "ex_top3_tickers_sharpe": 1.97,
+      "ex_top3_days_sharpe": 1.89,
+      "friction_2x_sharpe": 1.86,
+      "placebo_note": "Directly solves the SLS failure mode: bounding ind_gap_z \u2265 -3.0, Open \u2265 $5, and prev_rvol \u2264 1.5x eliminates S-3 dilution waterfalls.",
+      "recent_trades": [
+        {
+          "date": "2026-11-09",
+          "symbol": "SPRB",
+          "entry_px": 42.0,
+          "metric": -2.072,
+          "gross_bps": 1443.7,
+          "net_bps": 1419.0
+        },
+        {
+          "date": "2026-11-09",
+          "symbol": "OCUL",
+          "entry_px": 6.25,
+          "metric": -1.357,
+          "gross_bps": 644.7,
+          "net_bps": 611.3
+        },
+        {
+          "date": "2026-11-06",
+          "symbol": "VSTM",
+          "entry_px": 8.66,
+          "metric": -1.353,
+          "gross_bps": -294.5,
+          "net_bps": -321.4
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "RGNX",
+          "entry_px": 7.2,
+          "metric": -1.428,
+          "gross_bps": 997.5,
+          "net_bps": 962.1
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "LFCR",
+          "entry_px": 6.44,
+          "metric": -2.946,
+          "gross_bps": -27.0,
+          "net_bps": -69.2
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "ALMR",
+          "entry_px": 28.02,
+          "metric": -1.356,
+          "gross_bps": -335.0,
+          "net_bps": -353.5
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "URGN",
+          "entry_px": 33.04,
+          "metric": -1.98,
+          "gross_bps": -1381.7,
+          "net_bps": -1398.1
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "MIRM",
+          "entry_px": 83.13,
+          "metric": -2.24,
+          "gross_bps": 1573.2,
+          "net_bps": 1560.1
+        },
+        {
+          "date": "2026-10-28",
+          "symbol": "ENTA",
+          "entry_px": 11.2,
+          "metric": -2.453,
+          "gross_bps": 303.9,
+          "net_bps": 270.6
+        },
+        {
+          "date": "2026-10-27",
+          "symbol": "LFCR",
+          "entry_px": 6.36,
+          "metric": -2.411,
+          "gross_bps": 119.7,
+          "net_bps": 77.5
+        }
+      ]
+    },
+    {
+      "id": "S5",
+      "name": "S&P 500 1-of-N Narrow-Industry Capitulation Shock",
+      "short_name": "S&P 500 3d Capitulation",
+      "weight_pct": 20,
+      "direction": "LONG_SWING_3D",
+      "clock_window": "15:55 Close \u2192 Close + 3 Trading Days",
+      "holding_period": "3 Trading Days (1/3 Daily Cohort)",
+      "universe_rule": "S&P 500 Member, Close \u2265 $20, 20d ADTV \u2265 $25M, \u2265 6 Narrow-Industry Peers",
+      "signal_rule": "ind_resid_z \u2264 -2.50\u03c3 (isolated vs narrow peers), RVOL \u2265 2.5x, IBS \u2264 0.25",
+      "hedge_rule": "1/3 of sleeve per daily cohort; mandatory index constituency prevents terminal bankruptcy",
+      "structural_why": "Active pod-shop risk managers enforce mechanical drawdown liquidations into the close when a single S&P 500 constituent suffers an isolated 2.5\u03c3+ selloff while its narrow industry peers stay flat; mandatory S&P index passive inflows absorb the exhausted supply over T+1..T+3.",
+      "trades": 415,
+      "active_days": 219,
+      "gross_bps": 100.0,
+      "cost_bps": 7.2,
+      "net_bps": 92.8,
+      "win_rate_pct": 57.8,
+      "train_t": 2.13,
+      "oos_t": 2.2,
+      "full_t": 3.06,
+      "sharpe": 2.23,
+      "ex_top3_tickers_sharpe": 1.98,
+      "ex_top3_days_sharpe": 1.7,
+      "friction_2x_sharpe": 2.0,
+      "placebo_note": "Market-wide selloffs (where industry peers also drop) are automatically rejected because ind_resid_z stays near 0.",
+      "recent_trades": [
+        {
+          "date": "2026-11-06",
+          "symbol": "AXON",
+          "entry_px": 337.0,
+          "metric": -7.717,
+          "gross_bps": 51.8,
+          "net_bps": 45.1
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "IRM",
+          "entry_px": 109.72,
+          "metric": -5.002,
+          "gross_bps": 500.5,
+          "net_bps": 492.6
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "LRCX",
+          "entry_px": 207.02,
+          "metric": -2.614,
+          "gross_bps": 2008.1,
+          "net_bps": 2002.5
+        },
+        {
+          "date": "2026-11-05",
+          "symbol": "ROK",
+          "entry_px": 402.96,
+          "metric": -2.921,
+          "gross_bps": 422.8,
+          "net_bps": 416.0
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "DDOG",
+          "entry_px": 199.74,
+          "metric": -3.132,
+          "gross_bps": -482.2,
+          "net_bps": -488.4
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "NRG",
+          "entry_px": 91.04,
+          "metric": -5.281,
+          "gross_bps": 1699.7,
+          "net_bps": 1692.7
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "TPL",
+          "entry_px": 325.05,
+          "metric": -7.697,
+          "gross_bps": -325.7,
+          "net_bps": -334.2
+        },
+        {
+          "date": "2026-11-04",
+          "symbol": "FIS",
+          "entry_px": 30.58,
+          "metric": -11.032,
+          "gross_bps": -477.2,
+          "net_bps": -486.9
+        },
+        {
+          "date": "2026-11-03",
+          "symbol": "SYY",
+          "entry_px": 77.61,
+          "metric": -4.622,
+          "gross_bps": 371.1,
+          "net_bps": 363.8
+        },
+        {
+          "date": "2026-11-03",
+          "symbol": "ADM",
+          "entry_px": 74.31,
+          "metric": -6.028,
+          "gross_bps": -89.2,
+          "net_bps": -96.6
+        }
+      ]
+    }
+  ],
+  "correlation_matrix": {
+    "S1": {
+      "S1": 1.0,
+      "S2": -0.001,
+      "S3": 0.109,
+      "S4": 0.007,
+      "S5": 0.063
+    },
+    "S2": {
+      "S1": -0.001,
+      "S2": 1.0,
+      "S3": 0.071,
+      "S4": -0.047,
+      "S5": 0.083
+    },
+    "S3": {
+      "S1": 0.109,
+      "S2": 0.071,
+      "S3": 1.0,
+      "S4": -0.028,
+      "S5": 0.011
+    },
+    "S4": {
+      "S1": 0.007,
+      "S2": -0.047,
+      "S3": -0.028,
+      "S4": 1.0,
+      "S5": -0.15
+    },
+    "S5": {
+      "S1": 0.063,
+      "S2": 0.083,
+      "S3": 0.011,
+      "S4": -0.15,
+      "S5": 1.0
+    }
+  },
+  "monthly_returns": [
+    {
+      "month": "2025-01",
+      "port": 4.92,
+      "s1": 4.18,
+      "s2": 0.0,
+      "s3": 5.14,
+      "s4": 6.64,
+      "s5": 9.67
+    },
+    {
+      "month": "2025-02",
+      "port": 2.63,
+      "s1": 9.9,
+      "s2": 0.0,
+      "s3": 3.15,
+      "s4": -1.23,
+      "s5": -3.6
+    },
+    {
+      "month": "2025-03",
+      "port": 0.13,
+      "s1": -0.71,
+      "s2": 0.0,
+      "s3": -6.95,
+      "s4": 11.57,
+      "s5": 2.0
+    },
+    {
+      "month": "2025-04",
+      "port": 8.1,
+      "s1": 17.91,
+      "s2": 0.0,
+      "s3": -1.93,
+      "s4": 20.03,
+      "s5": 9.36
+    },
+    {
+      "month": "2025-05",
+      "port": -0.7,
+      "s1": -8.34,
+      "s2": 0.0,
+      "s3": 20.8,
+      "s4": -25.32,
+      "s5": 1.1
+    },
+    {
+      "month": "2025-06",
+      "port": 13.33,
+      "s1": 12.58,
+      "s2": 0.0,
+      "s3": 23.48,
+      "s4": 44.58,
+      "s5": 6.13
+    },
+    {
+      "month": "2025-07",
+      "port": 2.73,
+      "s1": 3.68,
+      "s2": 0.0,
+      "s3": 9.57,
+      "s4": 0.03,
+      "s5": -0.91
+    },
+    {
+      "month": "2025-08",
+      "port": -2.59,
+      "s1": -3.92,
+      "s2": 0.0,
+      "s3": -4.86,
+      "s4": -12.04,
+      "s5": 2.13
+    },
+    {
+      "month": "2025-09",
+      "port": 3.64,
+      "s1": 14.19,
+      "s2": 0.0,
+      "s3": -12.03,
+      "s4": 6.67,
+      "s5": 9.34
+    },
+    {
+      "month": "2025-10",
+      "port": 14.85,
+      "s1": 18.13,
+      "s2": 0.21,
+      "s3": 30.96,
+      "s4": 51.98,
+      "s5": -1.35
+    },
+    {
+      "month": "2025-11",
+      "port": 6.46,
+      "s1": 21.24,
+      "s2": -2.1,
+      "s3": -7.85,
+      "s4": 32.66,
+      "s5": 1.95
+    },
+    {
+      "month": "2025-12",
+      "port": 9.07,
+      "s1": 3.54,
+      "s2": -0.36,
+      "s3": 25.92,
+      "s4": 24.82,
+      "s5": 3.13
+    },
+    {
+      "month": "2026-01",
+      "port": 4.61,
+      "s1": 9.47,
+      "s2": 1.3,
+      "s3": 11.13,
+      "s4": -7.21,
+      "s5": 0.34
+    },
+    {
+      "month": "2026-02",
+      "port": 12.64,
+      "s1": 25.38,
+      "s2": 4.38,
+      "s3": 1.16,
+      "s4": 37.08,
+      "s5": 6.99
+    },
+    {
+      "month": "2026-03",
+      "port": 8.26,
+      "s1": 11.75,
+      "s2": 3.02,
+      "s3": -9.37,
+      "s4": 61.37,
+      "s5": 4.53
+    },
+    {
+      "month": "2026-04",
+      "port": 12.48,
+      "s1": 5.15,
+      "s2": 9.77,
+      "s3": 10.82,
+      "s4": 68.64,
+      "s5": -2.28
+    },
+    {
+      "month": "2026-05",
+      "port": 4.7,
+      "s1": 8.35,
+      "s2": 10.53,
+      "s3": -10.22,
+      "s4": 22.7,
+      "s5": -1.48
+    },
+    {
+      "month": "2026-06",
+      "port": 13.01,
+      "s1": 9.76,
+      "s2": 7.83,
+      "s3": 36.67,
+      "s4": 7.42,
+      "s5": 2.45
+    },
+    {
+      "month": "2026-07",
+      "port": 7.62,
+      "s1": -3.6,
+      "s2": 17.59,
+      "s3": 3.9,
+      "s4": 18.97,
+      "s5": 6.51
+    },
+    {
+      "month": "2026-08",
+      "port": 5.37,
+      "s1": 13.4,
+      "s2": -5.74,
+      "s3": 6.18,
+      "s4": 0.54,
+      "s5": 10.08
+    },
+    {
+      "month": "2026-09",
+      "port": 14.37,
+      "s1": 25.38,
+      "s2": 13.92,
+      "s3": 28.53,
+      "s4": -7.02,
+      "s5": -1.46
+    },
+    {
+      "month": "2026-10",
+      "port": -0.47,
+      "s1": 6.8,
+      "s2": 0.69,
+      "s3": -6.09,
+      "s4": -26.0,
+      "s5": 8.09
+    },
+    {
+      "month": "2026-11",
+      "port": 2.98,
+      "s1": -1.87,
+      "s2": 3.99,
+      "s3": 4.53,
+      "s4": 16.11,
+      "s5": -0.46
+    }
+  ],
+  "equity_curve": [
+    {
+      "date": "2025-10-20",
+      "port": 100.211,
+      "s1": 99.635,
+      "s2": 100.0,
+      "s3": 101.511,
+      "s4": 100.0,
+      "s5": 100.0,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-21",
+      "port": 100.48,
+      "s1": 100.705,
+      "s2": 100.0,
+      "s3": 101.511,
+      "s4": 100.0,
+      "s5": 100.0,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-22",
+      "port": 101.149,
+      "s1": 102.378,
+      "s2": 100.0,
+      "s3": 102.819,
+      "s4": 100.0,
+      "s5": 99.962,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-23",
+      "port": 102.394,
+      "s1": 103.24,
+      "s2": 100.0,
+      "s3": 106.851,
+      "s4": 103.626,
+      "s5": 99.334,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-24",
+      "port": 102.953,
+      "s1": 106.111,
+      "s2": 100.0,
+      "s3": 106.851,
+      "s4": 103.626,
+      "s5": 98.592,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-27",
+      "port": 103.792,
+      "s1": 109.909,
+      "s2": 100.0,
+      "s3": 106.421,
+      "s4": 103.626,
+      "s5": 98.592,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-28",
+      "port": 103.635,
+      "s1": 109.909,
+      "s2": 100.0,
+      "s3": 106.421,
+      "s4": 103.626,
+      "s5": 97.85,
+      "dd_pct": -0.15
+    },
+    {
+      "date": "2025-10-29",
+      "port": 102.926,
+      "s1": 108.889,
+      "s2": 100.212,
+      "s3": 104.672,
+      "s4": 103.626,
+      "s5": 96.982,
+      "dd_pct": -0.834
+    },
+    {
+      "date": "2025-10-30",
+      "port": 104.652,
+      "s1": 108.749,
+      "s2": 100.212,
+      "s3": 113.069,
+      "s4": 103.626,
+      "s5": 97.492,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-10-31",
+      "port": 105.139,
+      "s1": 108.568,
+      "s2": 100.212,
+      "s3": 113.069,
+      "s4": 111.004,
+      "s5": 96.492,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-03",
+      "port": 105.725,
+      "s1": 110.772,
+      "s2": 100.212,
+      "s3": 113.005,
+      "s4": 112.818,
+      "s5": 95.998,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-04",
+      "port": 106.14,
+      "s1": 110.816,
+      "s2": 100.212,
+      "s3": 114.982,
+      "s4": 112.818,
+      "s5": 96.153,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-05",
+      "port": 107.03,
+      "s1": 114.21,
+      "s2": 99.813,
+      "s3": 117.126,
+      "s4": 107.718,
+      "s5": 97.363,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-06",
+      "port": 108.151,
+      "s1": 116.419,
+      "s2": 97.79,
+      "s3": 110.537,
+      "s4": 129.823,
+      "s5": 98.065,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-07",
+      "port": 108.88,
+      "s1": 117.041,
+      "s2": 97.79,
+      "s3": 110.537,
+      "s4": 136.836,
+      "s5": 98.065,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-10",
+      "port": 110.81,
+      "s1": 120.785,
+      "s2": 97.79,
+      "s3": 112.613,
+      "s4": 145.011,
+      "s5": 98.065,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-11",
+      "port": 111.345,
+      "s1": 120.785,
+      "s2": 97.79,
+      "s3": 114.331,
+      "s4": 147.582,
+      "s5": 98.065,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-12",
+      "port": 111.665,
+      "s1": 121.376,
+      "s2": 97.79,
+      "s3": 115.276,
+      "s4": 147.582,
+      "s5": 98.065,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-13",
+      "port": 110.862,
+      "s1": 121.376,
+      "s2": 98.111,
+      "s3": 111.57,
+      "s4": 147.582,
+      "s5": 97.291,
+      "dd_pct": -0.719
+    },
+    {
+      "date": "2025-11-14",
+      "port": 110.656,
+      "s1": 121.376,
+      "s2": 98.111,
+      "s3": 111.57,
+      "s4": 144.83,
+      "s5": 97.291,
+      "dd_pct": -0.904
+    },
+    {
+      "date": "2025-11-17",
+      "port": 110.075,
+      "s1": 121.376,
+      "s2": 98.111,
+      "s3": 108.641,
+      "s4": 144.83,
+      "s5": 97.291,
+      "dd_pct": -1.424
+    },
+    {
+      "date": "2025-11-18",
+      "port": 111.004,
+      "s1": 124.16,
+      "s2": 98.111,
+      "s3": 109.575,
+      "s4": 146.265,
+      "s5": 97.291,
+      "dd_pct": -0.592
+    },
+    {
+      "date": "2025-11-19",
+      "port": 113.219,
+      "s1": 133.543,
+      "s2": 98.111,
+      "s3": 109.575,
+      "s4": 147.259,
+      "s5": 97.475,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-20",
+      "port": 114.453,
+      "s1": 136.531,
+      "s2": 98.111,
+      "s3": 111.399,
+      "s4": 147.259,
+      "s5": 98.441,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-11-21",
+      "port": 113.358,
+      "s1": 131.304,
+      "s2": 98.111,
+      "s3": 111.399,
+      "s4": 147.259,
+      "s5": 98.441,
+      "dd_pct": -0.957
+    },
+    {
+      "date": "2025-11-24",
+      "port": 113.466,
+      "s1": 130.945,
+      "s2": 98.111,
+      "s3": 112.31,
+      "s4": 147.259,
+      "s5": 98.441,
+      "dd_pct": -0.863
+    },
+    {
+      "date": "2025-11-25",
+      "port": 113.248,
+      "s1": 130.195,
+      "s2": 98.111,
+      "s3": 112.033,
+      "s4": 147.259,
+      "s5": 98.441,
+      "dd_pct": -1.054
+    },
+    {
+      "date": "2025-11-26",
+      "port": 112.645,
+      "s1": 131.632,
+      "s2": 98.111,
+      "s3": 107.59,
+      "s4": 147.259,
+      "s5": 98.37,
+      "dd_pct": -1.58
+    },
+    {
+      "date": "2025-11-28",
+      "port": 111.934,
+      "s1": 131.632,
+      "s2": 98.111,
+      "s3": 104.192,
+      "s4": 147.259,
+      "s5": 98.37,
+      "dd_pct": -2.201
+    },
+    {
+      "date": "2025-12-01",
+      "port": 111.687,
+      "s1": 131.632,
+      "s2": 98.111,
+      "s3": 104.059,
+      "s4": 144.382,
+      "s5": 98.37,
+      "dd_pct": -2.417
+    },
+    {
+      "date": "2025-12-02",
+      "port": 111.832,
+      "s1": 131.632,
+      "s2": 98.62,
+      "s3": 104.059,
+      "s4": 144.382,
+      "s5": 98.37,
+      "dd_pct": -2.291
+    },
+    {
+      "date": "2025-12-03",
+      "port": 111.236,
+      "s1": 131.632,
+      "s2": 98.62,
+      "s3": 104.505,
+      "s4": 137.423,
+      "s5": 97.698,
+      "dd_pct": -2.811
+    },
+    {
+      "date": "2025-12-04",
+      "port": 111.862,
+      "s1": 128.51,
+      "s2": 98.62,
+      "s3": 107.346,
+      "s4": 145.841,
+      "s5": 97.698,
+      "dd_pct": -2.264
+    },
+    {
+      "date": "2025-12-05",
+      "port": 112.287,
+      "s1": 128.51,
+      "s2": 98.62,
+      "s3": 107.346,
+      "s4": 151.383,
+      "s5": 97.698,
+      "dd_pct": -1.892
+    },
+    {
+      "date": "2025-12-08",
+      "port": 110.747,
+      "s1": 126.036,
+      "s2": 98.62,
+      "s3": 101.429,
+      "s4": 151.383,
+      "s5": 98.734,
+      "dd_pct": -3.238
+    },
+    {
+      "date": "2025-12-09",
+      "port": 111.679,
+      "s1": 126.036,
+      "s2": 98.62,
+      "s3": 102.348,
+      "s4": 162.482,
+      "s5": 98.373,
+      "dd_pct": -2.424
+    },
+    {
+      "date": "2025-12-10",
+      "port": 111.712,
+      "s1": 126.036,
+      "s2": 98.62,
+      "s3": 104.462,
+      "s4": 153.546,
+      "s5": 99.193,
+      "dd_pct": -2.395
+    },
+    {
+      "date": "2025-12-11",
+      "port": 111.888,
+      "s1": 127.386,
+      "s2": 98.62,
+      "s3": 103.628,
+      "s4": 153.546,
+      "s5": 99.438,
+      "dd_pct": -2.242
+    },
+    {
+      "date": "2025-12-12",
+      "port": 112.298,
+      "s1": 127.033,
+      "s2": 98.62,
+      "s3": 105.883,
+      "s4": 153.546,
+      "s5": 99.438,
+      "dd_pct": -1.884
+    },
+    {
+      "date": "2025-12-15",
+      "port": 112.969,
+      "s1": 130.721,
+      "s2": 98.62,
+      "s3": 105.147,
+      "s4": 153.546,
+      "s5": 99.491,
+      "dd_pct": -1.297
+    },
+    {
+      "date": "2025-12-16",
+      "port": 114.272,
+      "s1": 132.262,
+      "s2": 98.62,
+      "s3": 107.222,
+      "s4": 160.678,
+      "s5": 99.491,
+      "dd_pct": -0.159
+    },
+    {
+      "date": "2025-12-17",
+      "port": 114.751,
+      "s1": 129.635,
+      "s2": 98.62,
+      "s3": 112.13,
+      "s4": 160.678,
+      "s5": 99.491,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-18",
+      "port": 115.253,
+      "s1": 130.461,
+      "s2": 98.62,
+      "s3": 112.13,
+      "s4": 160.678,
+      "s5": 100.875,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-19",
+      "port": 115.273,
+      "s1": 133.143,
+      "s2": 97.757,
+      "s3": 109.931,
+      "s4": 160.678,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-22",
+      "port": 115.256,
+      "s1": 133.143,
+      "s2": 97.757,
+      "s3": 109.85,
+      "s4": 160.678,
+      "s5": 101.453,
+      "dd_pct": -0.015
+    },
+    {
+      "date": "2025-12-23",
+      "port": 115.362,
+      "s1": 133.143,
+      "s2": 97.757,
+      "s3": 110.358,
+      "s4": 160.678,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-24",
+      "port": 115.384,
+      "s1": 133.143,
+      "s2": 97.757,
+      "s3": 110.459,
+      "s4": 160.678,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-26",
+      "port": 121.323,
+      "s1": 133.143,
+      "s2": 97.757,
+      "s3": 130.542,
+      "s4": 184.964,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-29",
+      "port": 121.827,
+      "s1": 135.427,
+      "s2": 97.757,
+      "s3": 130.452,
+      "s4": 184.964,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-30",
+      "port": 121.902,
+      "s1": 135.427,
+      "s2": 97.757,
+      "s3": 130.856,
+      "s4": 184.964,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2025-12-31",
+      "port": 122.085,
+      "s1": 136.298,
+      "s2": 97.757,
+      "s3": 131.194,
+      "s4": 183.802,
+      "s5": 101.453,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-01-02",
+      "port": 121.697,
+      "s1": 132.73,
+      "s2": 97.757,
+      "s3": 133.405,
+      "s4": 183.802,
+      "s5": 101.453,
+      "dd_pct": -0.317
+    },
+    {
+      "date": "2026-01-05",
+      "port": 122.003,
+      "s1": 132.5,
+      "s2": 97.757,
+      "s3": 133.405,
+      "s4": 183.802,
+      "s5": 102.948,
+      "dd_pct": -0.067
+    },
+    {
+      "date": "2026-01-06",
+      "port": 122.327,
+      "s1": 130.901,
+      "s2": 97.757,
+      "s3": 137.19,
+      "s4": 183.802,
+      "s5": 102.948,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-01-07",
+      "port": 124.887,
+      "s1": 135.843,
+      "s2": 97.757,
+      "s3": 135.469,
+      "s4": 206.385,
+      "s5": 103.83,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-01-08",
+      "port": 124.154,
+      "s1": 135.843,
+      "s2": 97.757,
+      "s3": 134.372,
+      "s4": 197.608,
+      "s5": 103.83,
+      "dd_pct": -0.587
+    },
+    {
+      "date": "2026-01-09",
+      "port": 125.18,
+      "s1": 136.112,
+      "s2": 97.757,
+      "s3": 140.653,
+      "s4": 194.486,
+      "s5": 103.83,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-01-12",
+      "port": 122.518,
+      "s1": 131.219,
+      "s2": 97.757,
+      "s3": 143.202,
+      "s4": 163.561,
+      "s5": 103.83,
+      "dd_pct": -2.126
+    },
+    {
+      "date": "2026-01-13",
+      "port": 121.393,
+      "s1": 131.219,
+      "s2": 97.757,
+      "s3": 137.954,
+      "s4": 163.561,
+      "s5": 102.866,
+      "dd_pct": -3.025
+    },
+    {
+      "date": "2026-01-14",
+      "port": 121.971,
+      "s1": 131.219,
+      "s2": 97.757,
+      "s3": 141.241,
+      "s4": 163.561,
+      "s5": 102.866,
+      "dd_pct": -2.563
+    },
+    {
+      "date": "2026-01-15",
+      "port": 122.628,
+      "s1": 135.542,
+      "s2": 99.028,
+      "s3": 140.902,
+      "s4": 163.303,
+      "s5": 100.054,
+      "dd_pct": -2.039
+    },
+    {
+      "date": "2026-01-16",
+      "port": 122.139,
+      "s1": 135.542,
+      "s2": 99.028,
+      "s3": 137.696,
+      "s4": 163.303,
+      "s5": 100.335,
+      "dd_pct": -2.43
+    },
+    {
+      "date": "2026-01-20",
+      "port": 121.99,
+      "s1": 138.004,
+      "s2": 99.028,
+      "s3": 133.471,
+      "s4": 163.615,
+      "s5": 100.428,
+      "dd_pct": -2.549
+    },
+    {
+      "date": "2026-01-21",
+      "port": 121.67,
+      "s1": 139.763,
+      "s2": 99.028,
+      "s3": 129.598,
+      "s4": 163.615,
+      "s5": 100.428,
+      "dd_pct": -2.804
+    },
+    {
+      "date": "2026-01-22",
+      "port": 121.456,
+      "s1": 137.957,
+      "s2": 99.028,
+      "s3": 129.615,
+      "s4": 163.615,
+      "s5": 101.15,
+      "dd_pct": -2.975
+    },
+    {
+      "date": "2026-01-23",
+      "port": 121.511,
+      "s1": 137.13,
+      "s2": 99.028,
+      "s3": 129.021,
+      "s4": 163.615,
+      "s5": 102.603,
+      "dd_pct": -2.931
+    },
+    {
+      "date": "2026-01-26",
+      "port": 122.398,
+      "s1": 135.603,
+      "s2": 99.028,
+      "s3": 132.788,
+      "s4": 170.551,
+      "s5": 102.603,
+      "dd_pct": -2.223
+    },
+    {
+      "date": "2026-01-27",
+      "port": 122.41,
+      "s1": 136.74,
+      "s2": 99.028,
+      "s3": 132.513,
+      "s4": 170.551,
+      "s5": 101.79,
+      "dd_pct": -2.213
+    },
+    {
+      "date": "2026-01-28",
+      "port": 122.767,
+      "s1": 140.608,
+      "s2": 99.028,
+      "s3": 129.764,
+      "s4": 170.551,
+      "s5": 101.79,
+      "dd_pct": -1.928
+    },
+    {
+      "date": "2026-01-29",
+      "port": 122.658,
+      "s1": 135.44,
+      "s2": 99.028,
+      "s3": 135.136,
+      "s4": 170.551,
+      "s5": 101.802,
+      "dd_pct": -2.014
+    },
+    {
+      "date": "2026-01-30",
+      "port": 127.71,
+      "s1": 149.204,
+      "s2": 99.028,
+      "s3": 145.797,
+      "s4": 170.551,
+      "s5": 101.802,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-02",
+      "port": 128.784,
+      "s1": 152.272,
+      "s2": 99.028,
+      "s3": 146.41,
+      "s4": 185.367,
+      "s5": 98.615,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-03",
+      "port": 128.315,
+      "s1": 152.577,
+      "s2": 99.028,
+      "s3": 145.23,
+      "s4": 185.367,
+      "s5": 97.369,
+      "dd_pct": -0.364
+    },
+    {
+      "date": "2026-02-04",
+      "port": 128.439,
+      "s1": 152.852,
+      "s2": 99.028,
+      "s3": 142.324,
+      "s4": 185.367,
+      "s5": 99.569,
+      "dd_pct": -0.267
+    },
+    {
+      "date": "2026-02-05",
+      "port": 134.839,
+      "s1": 165.964,
+      "s2": 99.028,
+      "s3": 157.572,
+      "s4": 185.367,
+      "s5": 103.032,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-06",
+      "port": 135.711,
+      "s1": 168.853,
+      "s2": 99.028,
+      "s3": 160.835,
+      "s4": 185.367,
+      "s5": 101.986,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-09",
+      "port": 135.381,
+      "s1": 168.853,
+      "s2": 99.028,
+      "s3": 160.256,
+      "s4": 185.367,
+      "s5": 101.114,
+      "dd_pct": -0.243
+    },
+    {
+      "date": "2026-02-10",
+      "port": 135.641,
+      "s1": 169.549,
+      "s2": 99.028,
+      "s3": 162.915,
+      "s4": 181.649,
+      "s5": 100.899,
+      "dd_pct": -0.052
+    },
+    {
+      "date": "2026-02-11",
+      "port": 139.319,
+      "s1": 183.859,
+      "s2": 99.028,
+      "s3": 161.631,
+      "s4": 196.535,
+      "s5": 100.598,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-12",
+      "port": 139.524,
+      "s1": 183.506,
+      "s2": 99.028,
+      "s3": 160.311,
+      "s4": 196.535,
+      "s5": 102.4,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-13",
+      "port": 139.895,
+      "s1": 183.738,
+      "s2": 99.028,
+      "s3": 160.311,
+      "s4": 196.535,
+      "s5": 103.598,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-17",
+      "port": 139.696,
+      "s1": 182.412,
+      "s2": 99.028,
+      "s3": 160.311,
+      "s4": 196.535,
+      "s5": 103.796,
+      "dd_pct": -0.142
+    },
+    {
+      "date": "2026-02-18",
+      "port": 139.483,
+      "s1": 184.587,
+      "s2": 99.028,
+      "s3": 156.701,
+      "s4": 196.535,
+      "s5": 103.796,
+      "dd_pct": -0.294
+    },
+    {
+      "date": "2026-02-19",
+      "port": 142.0,
+      "s1": 194.373,
+      "s2": 99.028,
+      "s3": 156.424,
+      "s4": 206.64,
+      "s5": 103.796,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-20",
+      "port": 142.739,
+      "s1": 195.225,
+      "s2": 99.028,
+      "s3": 156.424,
+      "s4": 206.64,
+      "s5": 105.93,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-23",
+      "port": 143.314,
+      "s1": 195.225,
+      "s2": 99.028,
+      "s3": 155.645,
+      "s4": 205.595,
+      "s5": 108.859,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-24",
+      "port": 143.003,
+      "s1": 193.527,
+      "s2": 99.028,
+      "s3": 155.645,
+      "s4": 205.595,
+      "s5": 108.859,
+      "dd_pct": -0.217
+    },
+    {
+      "date": "2026-02-25",
+      "port": 144.078,
+      "s1": 192.811,
+      "s2": 101.639,
+      "s3": 157.559,
+      "s4": 204.338,
+      "s5": 108.859,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-02-26",
+      "port": 143.783,
+      "s1": 196.74,
+      "s2": 101.639,
+      "s3": 150.999,
+      "s4": 206.531,
+      "s5": 108.923,
+      "dd_pct": -0.204
+    },
+    {
+      "date": "2026-02-27",
+      "port": 143.856,
+      "s1": 187.065,
+      "s2": 103.369,
+      "s3": 147.486,
+      "s4": 233.785,
+      "s5": 108.923,
+      "dd_pct": -0.154
+    },
+    {
+      "date": "2026-03-02",
+      "port": 143.726,
+      "s1": 187.065,
+      "s2": 103.369,
+      "s3": 147.324,
+      "s4": 236.306,
+      "s5": 107.963,
+      "dd_pct": -0.244
+    },
+    {
+      "date": "2026-03-03",
+      "port": 143.13,
+      "s1": 183.964,
+      "s2": 103.369,
+      "s3": 147.324,
+      "s4": 236.306,
+      "s5": 107.963,
+      "dd_pct": -0.658
+    },
+    {
+      "date": "2026-03-04",
+      "port": 143.304,
+      "s1": 184.58,
+      "s2": 103.369,
+      "s3": 147.604,
+      "s4": 236.306,
+      "s5": 107.963,
+      "dd_pct": -0.537
+    },
+    {
+      "date": "2026-03-05",
+      "port": 142.92,
+      "s1": 185.844,
+      "s2": 103.248,
+      "s3": 147.604,
+      "s4": 226.621,
+      "s5": 107.963,
+      "dd_pct": -0.803
+    },
+    {
+      "date": "2026-03-06",
+      "port": 142.089,
+      "s1": 185.844,
+      "s2": 103.969,
+      "s3": 142.026,
+      "s4": 226.621,
+      "s5": 107.963,
+      "dd_pct": -1.38
+    },
+    {
+      "date": "2026-03-09",
+      "port": 141.817,
+      "s1": 177.44,
+      "s2": 103.085,
+      "s3": 141.864,
+      "s4": 253.228,
+      "s5": 107.963,
+      "dd_pct": -1.569
+    },
+    {
+      "date": "2026-03-10",
+      "port": 142.109,
+      "s1": 181.507,
+      "s2": 103.085,
+      "s3": 139.066,
+      "s4": 263.122,
+      "s5": 106.002,
+      "dd_pct": -1.366
+    },
+    {
+      "date": "2026-03-11",
+      "port": 142.58,
+      "s1": 185.308,
+      "s2": 103.085,
+      "s3": 137.73,
+      "s4": 263.122,
+      "s5": 106.002,
+      "dd_pct": -1.039
+    },
+    {
+      "date": "2026-03-12",
+      "port": 145.127,
+      "s1": 194.859,
+      "s2": 103.922,
+      "s3": 139.762,
+      "s4": 263.122,
+      "s5": 106.002,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-13",
+      "port": 145.774,
+      "s1": 196.847,
+      "s2": 103.922,
+      "s3": 141.404,
+      "s4": 265.706,
+      "s5": 105.248,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-16",
+      "port": 145.557,
+      "s1": 196.108,
+      "s2": 103.922,
+      "s3": 141.57,
+      "s4": 263.609,
+      "s5": 105.248,
+      "dd_pct": -0.149
+    },
+    {
+      "date": "2026-03-17",
+      "port": 145.638,
+      "s1": 196.547,
+      "s2": 103.922,
+      "s3": 141.57,
+      "s4": 263.609,
+      "s5": 105.248,
+      "dd_pct": -0.093
+    },
+    {
+      "date": "2026-03-18",
+      "port": 143.38,
+      "s1": 197.448,
+      "s2": 103.922,
+      "s3": 129.785,
+      "s4": 263.609,
+      "s5": 105.248,
+      "dd_pct": -1.642
+    },
+    {
+      "date": "2026-03-19",
+      "port": 144.928,
+      "s1": 202.051,
+      "s2": 105.342,
+      "s3": 129.0,
+      "s4": 270.876,
+      "s5": 105.248,
+      "dd_pct": -0.581
+    },
+    {
+      "date": "2026-03-20",
+      "port": 147.478,
+      "s1": 204.318,
+      "s2": 106.487,
+      "s3": 130.362,
+      "s4": 267.095,
+      "s5": 111.226,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-23",
+      "port": 147.32,
+      "s1": 203.452,
+      "s2": 106.487,
+      "s3": 130.353,
+      "s4": 267.095,
+      "s5": 111.226,
+      "dd_pct": -0.107
+    },
+    {
+      "date": "2026-03-24",
+      "port": 147.289,
+      "s1": 203.452,
+      "s2": 106.487,
+      "s3": 133.586,
+      "s4": 253.285,
+      "s5": 111.226,
+      "dd_pct": -0.128
+    },
+    {
+      "date": "2026-03-25",
+      "port": 147.95,
+      "s1": 207.106,
+      "s2": 106.487,
+      "s3": 133.586,
+      "s4": 253.285,
+      "s5": 111.226,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-26",
+      "port": 149.345,
+      "s1": 207.106,
+      "s2": 106.487,
+      "s3": 131.233,
+      "s4": 278.596,
+      "s5": 112.871,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-27",
+      "port": 150.866,
+      "s1": 210.357,
+      "s2": 106.487,
+      "s3": 134.171,
+      "s4": 283.557,
+      "s5": 112.871,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-30",
+      "port": 151.996,
+      "s1": 211.707,
+      "s2": 106.487,
+      "s3": 136.016,
+      "s4": 287.522,
+      "s5": 113.854,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-03-31",
+      "port": 155.739,
+      "s1": 209.051,
+      "s2": 106.487,
+      "s3": 133.67,
+      "s4": 377.255,
+      "s5": 113.854,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-01",
+      "port": 154.673,
+      "s1": 205.864,
+      "s2": 106.487,
+      "s3": 133.608,
+      "s4": 377.255,
+      "s5": 112.177,
+      "dd_pct": -0.685
+    },
+    {
+      "date": "2026-04-02",
+      "port": 156.106,
+      "s1": 208.036,
+      "s2": 106.487,
+      "s3": 134.636,
+      "s4": 396.459,
+      "s5": 112.177,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-06",
+      "port": 159.359,
+      "s1": 219.099,
+      "s2": 106.487,
+      "s3": 139.716,
+      "s4": 396.459,
+      "s5": 112.177,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-07",
+      "port": 158.002,
+      "s1": 215.895,
+      "s2": 106.487,
+      "s3": 139.716,
+      "s4": 396.459,
+      "s5": 109.451,
+      "dd_pct": -0.852
+    },
+    {
+      "date": "2026-04-08",
+      "port": 157.991,
+      "s1": 218.755,
+      "s2": 106.487,
+      "s3": 137.353,
+      "s4": 396.459,
+      "s5": 109.451,
+      "dd_pct": -0.859
+    },
+    {
+      "date": "2026-04-09",
+      "port": 159.632,
+      "s1": 218.755,
+      "s2": 109.311,
+      "s3": 135.822,
+      "s4": 396.459,
+      "s5": 112.729,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-10",
+      "port": 160.194,
+      "s1": 218.755,
+      "s2": 109.311,
+      "s3": 135.822,
+      "s4": 396.459,
+      "s5": 114.713,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-13",
+      "port": 160.194,
+      "s1": 218.755,
+      "s2": 109.311,
+      "s3": 135.532,
+      "s4": 398.138,
+      "s5": 114.713,
+      "dd_pct": -0.0
+    },
+    {
+      "date": "2026-04-14",
+      "port": 160.223,
+      "s1": 218.755,
+      "s2": 109.311,
+      "s3": 135.655,
+      "s4": 398.138,
+      "s5": 114.713,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-15",
+      "port": 160.185,
+      "s1": 215.7,
+      "s2": 109.311,
+      "s3": 134.628,
+      "s4": 403.266,
+      "s5": 116.711,
+      "dd_pct": -0.023
+    },
+    {
+      "date": "2026-04-16",
+      "port": 160.104,
+      "s1": 215.7,
+      "s2": 109.311,
+      "s3": 134.628,
+      "s4": 403.266,
+      "s5": 116.414,
+      "dd_pct": -0.074
+    },
+    {
+      "date": "2026-04-17",
+      "port": 160.104,
+      "s1": 215.7,
+      "s2": 109.311,
+      "s3": 134.628,
+      "s4": 403.266,
+      "s5": 116.414,
+      "dd_pct": -0.074
+    },
+    {
+      "date": "2026-04-20",
+      "port": 161.559,
+      "s1": 218.572,
+      "s2": 109.311,
+      "s3": 134.419,
+      "s4": 427.756,
+      "s5": 116.414,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-21",
+      "port": 160.091,
+      "s1": 217.186,
+      "s2": 109.311,
+      "s3": 138.806,
+      "s4": 388.382,
+      "s5": 113.606,
+      "dd_pct": -0.909
+    },
+    {
+      "date": "2026-04-22",
+      "port": 159.433,
+      "s1": 212.948,
+      "s2": 109.311,
+      "s3": 139.338,
+      "s4": 388.382,
+      "s5": 113.606,
+      "dd_pct": -1.316
+    },
+    {
+      "date": "2026-04-23",
+      "port": 159.298,
+      "s1": 211.899,
+      "s2": 109.311,
+      "s3": 139.338,
+      "s4": 388.382,
+      "s5": 113.826,
+      "dd_pct": -1.399
+    },
+    {
+      "date": "2026-04-24",
+      "port": 167.415,
+      "s1": 211.899,
+      "s2": 109.311,
+      "s3": 139.462,
+      "s4": 616.619,
+      "s5": 109.277,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-27",
+      "port": 169.996,
+      "s1": 213.15,
+      "s2": 109.311,
+      "s3": 148.01,
+      "s4": 626.998,
+      "s5": 109.277,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-28",
+      "port": 171.84,
+      "s1": 213.293,
+      "s2": 113.95,
+      "s3": 148.01,
+      "s4": 626.998,
+      "s5": 109.315,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-29",
+      "port": 173.927,
+      "s1": 214.427,
+      "s2": 116.895,
+      "s3": 148.01,
+      "s4": 626.998,
+      "s5": 111.695,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-04-30",
+      "port": 175.169,
+      "s1": 219.824,
+      "s2": 116.895,
+      "s3": 148.129,
+      "s4": 636.208,
+      "s5": 111.258,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-01",
+      "port": 174.375,
+      "s1": 224.322,
+      "s2": 116.895,
+      "s3": 148.129,
+      "s4": 561.009,
+      "s5": 112.465,
+      "dd_pct": -0.453
+    },
+    {
+      "date": "2026-05-04",
+      "port": 178.142,
+      "s1": 235.237,
+      "s2": 116.895,
+      "s3": 147.311,
+      "s4": 605.679,
+      "s5": 113.916,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-05",
+      "port": 178.989,
+      "s1": 235.337,
+      "s2": 123.197,
+      "s3": 142.84,
+      "s4": 610.161,
+      "s5": 111.926,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-06",
+      "port": 178.23,
+      "s1": 231.749,
+      "s2": 125.038,
+      "s3": 141.797,
+      "s4": 606.667,
+      "s5": 110.732,
+      "dd_pct": -0.424
+    },
+    {
+      "date": "2026-05-07",
+      "port": 179.219,
+      "s1": 236.886,
+      "s2": 125.038,
+      "s3": 145.777,
+      "s4": 568.624,
+      "s5": 111.098,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-08",
+      "port": 180.664,
+      "s1": 236.886,
+      "s2": 125.038,
+      "s3": 143.593,
+      "s4": 641.601,
+      "s5": 110.113,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-11",
+      "port": 181.974,
+      "s1": 238.715,
+      "s2": 125.038,
+      "s3": 144.817,
+      "s4": 641.601,
+      "s5": 112.104,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-12",
+      "port": 181.716,
+      "s1": 239.728,
+      "s2": 122.189,
+      "s3": 144.817,
+      "s4": 662.24,
+      "s5": 112.104,
+      "dd_pct": -0.142
+    },
+    {
+      "date": "2026-05-13",
+      "port": 183.473,
+      "s1": 239.728,
+      "s2": 122.189,
+      "s3": 148.701,
+      "s4": 690.762,
+      "s5": 112.104,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-14",
+      "port": 180.419,
+      "s1": 242.472,
+      "s2": 115.526,
+      "s3": 140.708,
+      "s4": 726.708,
+      "s5": 111.919,
+      "dd_pct": -1.665
+    },
+    {
+      "date": "2026-05-15",
+      "port": 180.925,
+      "s1": 244.777,
+      "s2": 115.015,
+      "s3": 140.911,
+      "s4": 735.776,
+      "s5": 111.919,
+      "dd_pct": -1.389
+    },
+    {
+      "date": "2026-05-18",
+      "port": 181.375,
+      "s1": 247.183,
+      "s2": 115.015,
+      "s3": 140.932,
+      "s4": 735.776,
+      "s5": 111.919,
+      "dd_pct": -1.144
+    },
+    {
+      "date": "2026-05-19",
+      "port": 183.1,
+      "s1": 252.11,
+      "s2": 115.254,
+      "s3": 143.756,
+      "s4": 735.776,
+      "s5": 111.919,
+      "dd_pct": -0.203
+    },
+    {
+      "date": "2026-05-20",
+      "port": 182.874,
+      "s1": 243.981,
+      "s2": 115.254,
+      "s3": 145.383,
+      "s4": 769.35,
+      "s5": 111.919,
+      "dd_pct": -0.327
+    },
+    {
+      "date": "2026-05-21",
+      "port": 182.824,
+      "s1": 239.962,
+      "s2": 117.753,
+      "s3": 145.383,
+      "s4": 769.35,
+      "s5": 111.036,
+      "dd_pct": -0.354
+    },
+    {
+      "date": "2026-05-22",
+      "port": 185.701,
+      "s1": 239.962,
+      "s2": 124.869,
+      "s3": 145.383,
+      "s4": 774.206,
+      "s5": 111.036,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-05-26",
+      "port": 183.792,
+      "s1": 235.701,
+      "s2": 124.869,
+      "s3": 141.137,
+      "s4": 774.206,
+      "s5": 111.036,
+      "dd_pct": -1.028
+    },
+    {
+      "date": "2026-05-27",
+      "port": 182.886,
+      "s1": 235.701,
+      "s2": 124.869,
+      "s3": 140.746,
+      "s4": 774.206,
+      "s5": 108.607,
+      "dd_pct": -1.516
+    },
+    {
+      "date": "2026-05-28",
+      "port": 182.561,
+      "s1": 238.169,
+      "s2": 124.869,
+      "s3": 136.355,
+      "s4": 774.206,
+      "s5": 109.608,
+      "dd_pct": -1.691
+    },
+    {
+      "date": "2026-05-29",
+      "port": 183.396,
+      "s1": 238.169,
+      "s2": 129.203,
+      "s3": 132.995,
+      "s4": 780.606,
+      "s5": 109.608,
+      "dd_pct": -1.241
+    },
+    {
+      "date": "2026-06-01",
+      "port": 184.636,
+      "s1": 245.628,
+      "s2": 129.203,
+      "s3": 132.286,
+      "s4": 780.606,
+      "s5": 109.608,
+      "dd_pct": -0.573
+    },
+    {
+      "date": "2026-06-02",
+      "port": 181.917,
+      "s1": 244.76,
+      "s2": 132.343,
+      "s3": 129.834,
+      "s4": 654.053,
+      "s5": 109.608,
+      "dd_pct": -2.038
+    },
+    {
+      "date": "2026-06-03",
+      "port": 182.694,
+      "s1": 248.053,
+      "s2": 132.343,
+      "s3": 133.35,
+      "s4": 624.569,
+      "s5": 109.608,
+      "dd_pct": -1.619
+    },
+    {
+      "date": "2026-06-04",
+      "port": 181.723,
+      "s1": 248.071,
+      "s2": 122.701,
+      "s3": 139.367,
+      "s4": 648.653,
+      "s5": 109.608,
+      "dd_pct": -2.142
+    },
+    {
+      "date": "2026-06-05",
+      "port": 183.456,
+      "s1": 243.197,
+      "s2": 126.1,
+      "s3": 144.607,
+      "s4": 648.653,
+      "s5": 109.608,
+      "dd_pct": -1.209
+    },
+    {
+      "date": "2026-06-08",
+      "port": 183.53,
+      "s1": 242.816,
+      "s2": 126.1,
+      "s3": 145.184,
+      "s4": 648.653,
+      "s5": 109.608,
+      "dd_pct": -1.169
+    },
+    {
+      "date": "2026-06-09",
+      "port": 183.715,
+      "s1": 239.103,
+      "s2": 128.536,
+      "s3": 145.184,
+      "s4": 648.653,
+      "s5": 109.608,
+      "dd_pct": -1.07
+    },
+    {
+      "date": "2026-06-10",
+      "port": 183.928,
+      "s1": 235.338,
+      "s2": 128.536,
+      "s3": 146.049,
+      "s4": 651.014,
+      "s5": 111.55,
+      "dd_pct": -0.955
+    },
+    {
+      "date": "2026-06-11",
+      "port": 185.336,
+      "s1": 242.904,
+      "s2": 128.536,
+      "s3": 145.768,
+      "s4": 651.014,
+      "s5": 111.55,
+      "dd_pct": -0.197
+    },
+    {
+      "date": "2026-06-12",
+      "port": 188.573,
+      "s1": 246.37,
+      "s2": 128.536,
+      "s3": 154.311,
+      "s4": 665.181,
+      "s5": 111.55,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-15",
+      "port": 189.059,
+      "s1": 248.195,
+      "s2": 128.536,
+      "s3": 155.017,
+      "s4": 665.181,
+      "s5": 111.445,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-16",
+      "port": 193.332,
+      "s1": 248.195,
+      "s2": 128.536,
+      "s3": 166.681,
+      "s4": 715.409,
+      "s5": 111.445,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-17",
+      "port": 196.419,
+      "s1": 248.195,
+      "s2": 136.652,
+      "s3": 167.406,
+      "s4": 715.409,
+      "s5": 111.062,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-18",
+      "port": 197.134,
+      "s1": 248.195,
+      "s2": 138.612,
+      "s3": 167.406,
+      "s4": 715.409,
+      "s5": 111.093,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-22",
+      "port": 199.179,
+      "s1": 258.735,
+      "s2": 138.612,
+      "s3": 167.203,
+      "s4": 715.409,
+      "s5": 111.093,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-23",
+      "port": 200.37,
+      "s1": 259.407,
+      "s2": 138.612,
+      "s3": 171.66,
+      "s4": 715.409,
+      "s5": 111.093,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-24",
+      "port": 200.882,
+      "s1": 259.407,
+      "s2": 138.612,
+      "s3": 173.852,
+      "s4": 715.409,
+      "s5": 111.093,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-25",
+      "port": 196.844,
+      "s1": 253.888,
+      "s2": 133.646,
+      "s3": 168.787,
+      "s4": 715.409,
+      "s5": 111.093,
+      "dd_pct": -2.01
+    },
+    {
+      "date": "2026-06-26",
+      "port": 202.026,
+      "s1": 253.888,
+      "s2": 139.321,
+      "s3": 168.787,
+      "s4": 812.351,
+      "s5": 112.293,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-29",
+      "port": 205.029,
+      "s1": 255.903,
+      "s2": 139.321,
+      "s3": 176.802,
+      "s4": 839.814,
+      "s5": 112.293,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-06-30",
+      "port": 207.256,
+      "s1": 261.423,
+      "s2": 139.321,
+      "s3": 181.771,
+      "s4": 838.541,
+      "s5": 112.293,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-01",
+      "port": 207.513,
+      "s1": 258.507,
+      "s2": 139.321,
+      "s3": 185.433,
+      "s4": 838.541,
+      "s5": 112.293,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-02",
+      "port": 209.533,
+      "s1": 255.151,
+      "s2": 144.722,
+      "s3": 188.48,
+      "s4": 838.541,
+      "s5": 112.293,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-06",
+      "port": 208.48,
+      "s1": 244.925,
+      "s2": 144.722,
+      "s3": 189.474,
+      "s4": 871.577,
+      "s5": 112.293,
+      "dd_pct": -0.503
+    },
+    {
+      "date": "2026-07-07",
+      "port": 209.222,
+      "s1": 250.852,
+      "s2": 142.209,
+      "s3": 191.225,
+      "s4": 871.577,
+      "s5": 112.293,
+      "dd_pct": -0.148
+    },
+    {
+      "date": "2026-07-08",
+      "port": 210.134,
+      "s1": 249.472,
+      "s2": 142.209,
+      "s3": 192.133,
+      "s4": 871.577,
+      "s5": 114.981,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-09",
+      "port": 207.596,
+      "s1": 252.043,
+      "s2": 139.201,
+      "s3": 183.136,
+      "s4": 871.577,
+      "s5": 114.981,
+      "dd_pct": -1.208
+    },
+    {
+      "date": "2026-07-10",
+      "port": 209.203,
+      "s1": 256.174,
+      "s2": 139.201,
+      "s3": 186.473,
+      "s4": 871.577,
+      "s5": 114.981,
+      "dd_pct": -0.443
+    },
+    {
+      "date": "2026-07-13",
+      "port": 209.666,
+      "s1": 256.174,
+      "s2": 139.201,
+      "s3": 188.534,
+      "s4": 871.577,
+      "s5": 114.981,
+      "dd_pct": -0.223
+    },
+    {
+      "date": "2026-07-14",
+      "port": 210.581,
+      "s1": 260.463,
+      "s2": 139.201,
+      "s3": 187.08,
+      "s4": 871.577,
+      "s5": 115.97,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-15",
+      "port": 211.358,
+      "s1": 260.463,
+      "s2": 139.201,
+      "s3": 186.197,
+      "s4": 871.577,
+      "s5": 118.659,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-16",
+      "port": 207.618,
+      "s1": 257.453,
+      "s2": 137.726,
+      "s3": 174.876,
+      "s4": 871.577,
+      "s5": 118.659,
+      "dd_pct": -1.77
+    },
+    {
+      "date": "2026-07-17",
+      "port": 209.439,
+      "s1": 257.453,
+      "s2": 137.726,
+      "s3": 174.876,
+      "s4": 956.323,
+      "s5": 118.093,
+      "dd_pct": -0.908
+    },
+    {
+      "date": "2026-07-20",
+      "port": 206.748,
+      "s1": 244.542,
+      "s2": 137.6,
+      "s3": 174.717,
+      "s4": 957.288,
+      "s5": 118.093,
+      "dd_pct": -2.181
+    },
+    {
+      "date": "2026-07-21",
+      "port": 206.764,
+      "s1": 243.983,
+      "s2": 137.6,
+      "s3": 171.659,
+      "s4": 997.03,
+      "s5": 118.093,
+      "dd_pct": -2.174
+    },
+    {
+      "date": "2026-07-22",
+      "port": 209.613,
+      "s1": 245.396,
+      "s2": 137.6,
+      "s3": 179.059,
+      "s4": 1033.989,
+      "s5": 118.093,
+      "dd_pct": -0.826
+    },
+    {
+      "date": "2026-07-23",
+      "port": 213.868,
+      "s1": 255.914,
+      "s2": 142.958,
+      "s3": 181.244,
+      "s4": 1033.989,
+      "s5": 116.564,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-24",
+      "port": 213.739,
+      "s1": 246.23,
+      "s2": 143.794,
+      "s3": 189.979,
+      "s4": 1010.804,
+      "s5": 116.564,
+      "dd_pct": -0.06
+    },
+    {
+      "date": "2026-07-27",
+      "port": 213.332,
+      "s1": 243.184,
+      "s2": 143.794,
+      "s3": 191.816,
+      "s4": 1003.222,
+      "s5": 116.564,
+      "dd_pct": -0.251
+    },
+    {
+      "date": "2026-07-28",
+      "port": 212.545,
+      "s1": 241.031,
+      "s2": 143.794,
+      "s3": 191.816,
+      "s4": 1003.222,
+      "s5": 115.707,
+      "dd_pct": -0.618
+    },
+    {
+      "date": "2026-07-29",
+      "port": 223.895,
+      "s1": 246.983,
+      "s2": 164.957,
+      "s3": 195.755,
+      "s4": 1003.222,
+      "s5": 119.364,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-07-30",
+      "port": 222.162,
+      "s1": 243.152,
+      "s2": 164.957,
+      "s3": 191.598,
+      "s4": 997.572,
+      "s5": 119.93,
+      "dd_pct": -0.774
+    },
+    {
+      "date": "2026-07-31",
+      "port": 223.05,
+      "s1": 252.021,
+      "s2": 163.828,
+      "s3": 188.854,
+      "s4": 997.572,
+      "s5": 119.603,
+      "dd_pct": -0.377
+    },
+    {
+      "date": "2026-08-03",
+      "port": 227.807,
+      "s1": 257.722,
+      "s2": 166.412,
+      "s3": 185.642,
+      "s4": 1124.357,
+      "s5": 121.053,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-04",
+      "port": 228.683,
+      "s1": 260.117,
+      "s2": 166.412,
+      "s3": 184.923,
+      "s4": 1148.581,
+      "s5": 121.139,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-05",
+      "port": 226.461,
+      "s1": 264.607,
+      "s2": 158.773,
+      "s3": 184.239,
+      "s4": 1148.581,
+      "s5": 120.038,
+      "dd_pct": -0.972
+    },
+    {
+      "date": "2026-08-06",
+      "port": 228.285,
+      "s1": 267.025,
+      "s2": 155.076,
+      "s3": 184.239,
+      "s4": 1200.435,
+      "s5": 124.284,
+      "dd_pct": -0.174
+    },
+    {
+      "date": "2026-08-07",
+      "port": 224.675,
+      "s1": 247.295,
+      "s2": 155.076,
+      "s3": 184.239,
+      "s4": 1232.397,
+      "s5": 124.284,
+      "dd_pct": -1.753
+    },
+    {
+      "date": "2026-08-10",
+      "port": 227.478,
+      "s1": 256.746,
+      "s2": 155.076,
+      "s3": 185.652,
+      "s4": 1249.438,
+      "s5": 124.284,
+      "dd_pct": -0.527
+    },
+    {
+      "date": "2026-08-11",
+      "port": 226.404,
+      "s1": 256.746,
+      "s2": 155.076,
+      "s3": 185.652,
+      "s4": 1190.462,
+      "s5": 124.284,
+      "dd_pct": -0.997
+    },
+    {
+      "date": "2026-08-12",
+      "port": 226.617,
+      "s1": 256.813,
+      "s2": 155.076,
+      "s3": 185.652,
+      "s4": 1200.903,
+      "s5": 124.284,
+      "dd_pct": -0.904
+    },
+    {
+      "date": "2026-08-13",
+      "port": 226.553,
+      "s1": 256.393,
+      "s2": 154.419,
+      "s3": 185.652,
+      "s4": 1191.517,
+      "s5": 125.504,
+      "dd_pct": -0.932
+    },
+    {
+      "date": "2026-08-14",
+      "port": 225.283,
+      "s1": 254.274,
+      "s2": 154.419,
+      "s3": 185.652,
+      "s4": 1149.374,
+      "s5": 125.504,
+      "dd_pct": -1.487
+    },
+    {
+      "date": "2026-08-17",
+      "port": 223.129,
+      "s1": 254.274,
+      "s2": 154.419,
+      "s3": 186.867,
+      "s4": 1024.411,
+      "s5": 125.504,
+      "dd_pct": -2.429
+    },
+    {
+      "date": "2026-08-18",
+      "port": 225.967,
+      "s1": 255.734,
+      "s2": 154.419,
+      "s3": 197.412,
+      "s4": 1024.411,
+      "s5": 125.504,
+      "dd_pct": -1.188
+    },
+    {
+      "date": "2026-08-19",
+      "port": 228.102,
+      "s1": 262.226,
+      "s2": 154.419,
+      "s3": 200.473,
+      "s4": 1024.411,
+      "s5": 125.504,
+      "dd_pct": -0.254
+    },
+    {
+      "date": "2026-08-20",
+      "port": 226.89,
+      "s1": 262.226,
+      "s2": 154.419,
+      "s3": 188.298,
+      "s4": 1024.411,
+      "s5": 129.793,
+      "dd_pct": -0.784
+    },
+    {
+      "date": "2026-08-21",
+      "port": 227.709,
+      "s1": 266.012,
+      "s2": 154.419,
+      "s3": 188.298,
+      "s4": 1024.411,
+      "s5": 129.793,
+      "dd_pct": -0.426
+    },
+    {
+      "date": "2026-08-24",
+      "port": 229.633,
+      "s1": 274.995,
+      "s2": 154.419,
+      "s3": 188.303,
+      "s4": 1024.411,
+      "s5": 129.793,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-25",
+      "port": 230.891,
+      "s1": 281.02,
+      "s2": 154.419,
+      "s3": 188.303,
+      "s4": 1024.411,
+      "s5": 129.793,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-26",
+      "port": 230.891,
+      "s1": 281.02,
+      "s2": 154.419,
+      "s3": 188.303,
+      "s4": 1024.411,
+      "s5": 129.793,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-27",
+      "port": 231.467,
+      "s1": 277.476,
+      "s2": 154.419,
+      "s3": 191.235,
+      "s4": 1028.452,
+      "s5": 131.181,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-08-28",
+      "port": 230.937,
+      "s1": 277.476,
+      "s2": 154.419,
+      "s3": 191.413,
+      "s4": 1002.998,
+      "s5": 131.181,
+      "dd_pct": -0.229
+    },
+    {
+      "date": "2026-08-31",
+      "port": 235.033,
+      "s1": 285.79,
+      "s2": 154.419,
+      "s3": 200.525,
+      "s4": 1002.998,
+      "s5": 131.656,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-01",
+      "port": 238.54,
+      "s1": 292.373,
+      "s2": 154.419,
+      "s3": 209.711,
+      "s4": 1002.998,
+      "s5": 131.656,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-02",
+      "port": 238.405,
+      "s1": 296.211,
+      "s2": 154.419,
+      "s3": 205.678,
+      "s4": 1002.998,
+      "s5": 131.656,
+      "dd_pct": -0.056
+    },
+    {
+      "date": "2026-09-03",
+      "port": 241.83,
+      "s1": 302.166,
+      "s2": 154.419,
+      "s3": 215.282,
+      "s4": 1002.998,
+      "s5": 131.656,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-04",
+      "port": 242.883,
+      "s1": 311.903,
+      "s2": 154.419,
+      "s3": 211.3,
+      "s4": 1002.998,
+      "s5": 131.656,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-08",
+      "port": 243.339,
+      "s1": 312.758,
+      "s2": 154.419,
+      "s3": 209.108,
+      "s4": 1042.808,
+      "s5": 131.194,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-09",
+      "port": 242.207,
+      "s1": 312.758,
+      "s2": 156.597,
+      "s3": 203.978,
+      "s4": 1110.69,
+      "s5": 124.779,
+      "dd_pct": -0.465
+    },
+    {
+      "date": "2026-09-10",
+      "port": 248.264,
+      "s1": 315.215,
+      "s2": 165.35,
+      "s3": 218.929,
+      "s4": 1048.575,
+      "s5": 124.779,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-11",
+      "port": 255.079,
+      "s1": 317.974,
+      "s2": 165.35,
+      "s3": 246.584,
+      "s4": 1048.575,
+      "s5": 124.779,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-14",
+      "port": 259.48,
+      "s1": 319.392,
+      "s2": 175.188,
+      "s3": 248.14,
+      "s4": 1048.575,
+      "s5": 124.779,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-15",
+      "port": 260.263,
+      "s1": 322.754,
+      "s2": 171.216,
+      "s3": 253.479,
+      "s4": 1058.425,
+      "s5": 125.285,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-16",
+      "port": 260.951,
+      "s1": 326.433,
+      "s2": 171.216,
+      "s3": 253.479,
+      "s4": 1058.425,
+      "s5": 125.156,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-17",
+      "port": 262.526,
+      "s1": 332.787,
+      "s2": 171.216,
+      "s3": 254.965,
+      "s4": 1058.425,
+      "s5": 125.156,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-18",
+      "port": 262.007,
+      "s1": 340.893,
+      "s2": 171.216,
+      "s3": 239.921,
+      "s4": 1058.425,
+      "s5": 127.491,
+      "dd_pct": -0.198
+    },
+    {
+      "date": "2026-09-21",
+      "port": 263.494,
+      "s1": 347.854,
+      "s2": 171.216,
+      "s3": 240.606,
+      "s4": 1058.425,
+      "s5": 127.491,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-22",
+      "port": 266.481,
+      "s1": 358.15,
+      "s2": 174.373,
+      "s3": 249.188,
+      "s4": 967.463,
+      "s5": 127.993,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-09-23",
+      "port": 266.159,
+      "s1": 355.482,
+      "s2": 175.909,
+      "s3": 247.571,
+      "s4": 967.463,
+      "s5": 127.833,
+      "dd_pct": -0.121
+    },
+    {
+      "date": "2026-09-24",
+      "port": 265.768,
+      "s1": 357.578,
+      "s2": 175.909,
+      "s3": 256.975,
+      "s4": 894.685,
+      "s5": 125.905,
+      "dd_pct": -0.267
+    },
+    {
+      "date": "2026-09-25",
+      "port": 265.294,
+      "s1": 355.027,
+      "s2": 175.909,
+      "s3": 256.975,
+      "s4": 894.685,
+      "s5": 125.905,
+      "dd_pct": -0.445
+    },
+    {
+      "date": "2026-09-28",
+      "port": 265.677,
+      "s1": 352.753,
+      "s2": 175.909,
+      "s3": 257.273,
+      "s4": 894.685,
+      "s5": 127.676,
+      "dd_pct": -0.302
+    },
+    {
+      "date": "2026-09-29",
+      "port": 266.011,
+      "s1": 353.644,
+      "s2": 175.909,
+      "s3": 258.079,
+      "s4": 894.685,
+      "s5": 127.676,
+      "dd_pct": -0.176
+    },
+    {
+      "date": "2026-09-30",
+      "port": 268.802,
+      "s1": 358.317,
+      "s2": 175.909,
+      "s3": 257.732,
+      "s4": 932.544,
+      "s5": 129.736,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-10-01",
+      "port": 266.245,
+      "s1": 357.697,
+      "s2": 175.909,
+      "s3": 263.341,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -0.951
+    },
+    {
+      "date": "2026-10-02",
+      "port": 267.073,
+      "s1": 357.546,
+      "s2": 175.909,
+      "s3": 267.576,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -0.643
+    },
+    {
+      "date": "2026-10-05",
+      "port": 268.285,
+      "s1": 362.938,
+      "s2": 175.909,
+      "s3": 268.6,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -0.193
+    },
+    {
+      "date": "2026-10-06",
+      "port": 265.477,
+      "s1": 361.074,
+      "s2": 175.909,
+      "s3": 256.268,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -1.237
+    },
+    {
+      "date": "2026-10-07",
+      "port": 264.667,
+      "s1": 361.074,
+      "s2": 175.909,
+      "s3": 252.359,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -1.539
+    },
+    {
+      "date": "2026-10-08",
+      "port": 266.03,
+      "s1": 361.083,
+      "s2": 175.909,
+      "s3": 258.851,
+      "s4": 790.05,
+      "s5": 130.933,
+      "dd_pct": -1.031
+    },
+    {
+      "date": "2026-10-09",
+      "port": 266.522,
+      "s1": 359.514,
+      "s2": 175.909,
+      "s3": 258.355,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -0.848
+    },
+    {
+      "date": "2026-10-12",
+      "port": 264.633,
+      "s1": 358.293,
+      "s2": 175.909,
+      "s3": 250.296,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -1.551
+    },
+    {
+      "date": "2026-10-13",
+      "port": 266.672,
+      "s1": 362.306,
+      "s2": 181.317,
+      "s3": 246.815,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -0.793
+    },
+    {
+      "date": "2026-10-14",
+      "port": 263.568,
+      "s1": 363.533,
+      "s2": 181.317,
+      "s3": 231.406,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -1.947
+    },
+    {
+      "date": "2026-10-15",
+      "port": 263.477,
+      "s1": 364.318,
+      "s2": 181.317,
+      "s3": 230.383,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -1.981
+    },
+    {
+      "date": "2026-10-16",
+      "port": 266.354,
+      "s1": 361.745,
+      "s2": 181.317,
+      "s3": 244.995,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -0.911
+    },
+    {
+      "date": "2026-10-19",
+      "port": 266.961,
+      "s1": 366.827,
+      "s2": 181.317,
+      "s3": 243.483,
+      "s4": 790.05,
+      "s5": 133.106,
+      "dd_pct": -0.685
+    },
+    {
+      "date": "2026-10-20",
+      "port": 267.453,
+      "s1": 368.934,
+      "s2": 181.317,
+      "s3": 242.294,
+      "s4": 790.05,
+      "s5": 134.027,
+      "dd_pct": -0.502
+    },
+    {
+      "date": "2026-10-21",
+      "port": 268.66,
+      "s1": 373.53,
+      "s2": 181.317,
+      "s3": 245.744,
+      "s4": 790.05,
+      "s5": 133.055,
+      "dd_pct": -0.053
+    },
+    {
+      "date": "2026-10-22",
+      "port": 269.25,
+      "s1": 373.53,
+      "s2": 181.317,
+      "s3": 243.237,
+      "s4": 790.05,
+      "s5": 135.874,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-10-23",
+      "port": 269.957,
+      "s1": 383.868,
+      "s2": 177.127,
+      "s3": 243.237,
+      "s4": 790.05,
+      "s5": 136.882,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-10-26",
+      "port": 265.743,
+      "s1": 383.868,
+      "s2": 177.127,
+      "s3": 243.237,
+      "s4": 666.714,
+      "s5": 136.882,
+      "dd_pct": -1.561
+    },
+    {
+      "date": "2026-10-27",
+      "port": 264.376,
+      "s1": 377.035,
+      "s2": 177.127,
+      "s3": 240.896,
+      "s4": 671.881,
+      "s5": 137.196,
+      "dd_pct": -2.067
+    },
+    {
+      "date": "2026-10-28",
+      "port": 265.146,
+      "s1": 382.336,
+      "s2": 177.127,
+      "s3": 240.896,
+      "s4": 690.062,
+      "s5": 134.926,
+      "dd_pct": -1.782
+    },
+    {
+      "date": "2026-10-29",
+      "port": 264.815,
+      "s1": 382.698,
+      "s2": 177.127,
+      "s3": 235.962,
+      "s4": 690.062,
+      "s5": 136.687,
+      "dd_pct": -1.905
+    },
+    {
+      "date": "2026-10-30",
+      "port": 267.552,
+      "s1": 382.698,
+      "s2": 177.127,
+      "s3": 242.045,
+      "s4": 690.062,
+      "s5": 140.227,
+      "dd_pct": -0.891
+    },
+    {
+      "date": "2026-11-02",
+      "port": 265.72,
+      "s1": 378.879,
+      "s2": 177.127,
+      "s3": 246.016,
+      "s4": 690.062,
+      "s5": 134.875,
+      "dd_pct": -1.569
+    },
+    {
+      "date": "2026-11-03",
+      "port": 267.699,
+      "s1": 379.659,
+      "s2": 177.127,
+      "s3": 255.096,
+      "s4": 690.062,
+      "s5": 134.572,
+      "dd_pct": -0.836
+    },
+    {
+      "date": "2026-11-04",
+      "port": 262.478,
+      "s1": 371.871,
+      "s2": 177.127,
+      "s3": 236.775,
+      "s4": 685.563,
+      "s5": 135.002,
+      "dd_pct": -2.771
+    },
+    {
+      "date": "2026-11-05",
+      "port": 272.917,
+      "s1": 377.98,
+      "s2": 184.201,
+      "s3": 248.13,
+      "s4": 751.524,
+      "s5": 139.369,
+      "dd_pct": 0.0
+    },
+    {
+      "date": "2026-11-06",
+      "port": 272.364,
+      "s1": 379.324,
+      "s2": 184.201,
+      "s3": 248.13,
+      "s4": 727.372,
+      "s5": 139.578,
+      "dd_pct": -0.202
+    },
+    {
+      "date": "2026-11-09",
+      "port": 275.521,
+      "s1": 375.546,
+      "s2": 184.201,
+      "s3": 253.004,
+      "s4": 801.211,
+      "s5": 139.578,
+      "dd_pct": 0.0
+    }
+  ],
+  "sls_case_study": {
+    "symbol": "SLS",
+    "company": "SELLAS Life Sciences Group",
+    "cik": "0001390478",
+    "filing": "Form S-3ASR Automatic Shelf Registration (2026-03-20)",
+    "ocf_ttm_usd": -28400000,
+    "days_audited_5m": 225,
+    "dip_150bps_freq_pct": 42.7,
+    "reclaim_open_win_rate_pct": 69.8,
+    "capped_target_net_bps": -40.1,
+    "hold_to_close_net_bps": -80.6,
+    "reg_nms_tick_drag_bps": 46.5,
+    "broad_habit_train_gross_bps": 62.6,
+    "broad_habit_oos_net_bps": -34.5,
+    "verdict": "Optical Reclaim Illusion: SLS reclaims its 09:30 open 69.8% of the time on small dips, but capping upside at the open while eating -8% to -15% uncapped ATM shelf-offering liquidation days + $0.01 Reg NMS tick drag (~46.5 bps RT at $4.30) turns it strongly negative (-40.1 to -80.6 bps/trade). Upgrading to S4 ($5+ floor, bounded -1.2\u03c3..-3.0\u03c3 industry gap, quiet prior RVOL \u2264 1.5x) converts biotech dislocations into +172.6 bps/trade net."
+  },
+  "graveyard": [
+    {
+      "family": "Paired 2x/3x Bull + Bear Leveraged ETP Volatility Decay Short",
+      "specs_tested": 248,
+      "gross_bps": 3.2,
+      "net_bps": -10.7,
+      "oos_t": -2.41,
+      "why_failed": "Hard-to-borrow fees (8\u201325% annualized on 3x inverse/single-stock ETPs) plus path-dependent trending weeks completely eat theoretical daily variance drag."
+    },
+    {
+      "family": "Closed-End Fund (CEF) Extreme Selloff / NAV Mean Reversion",
+      "specs_tested": 612,
+      "gross_bps": 14.8,
+      "net_bps": -47.6,
+      "oos_t": -3.18,
+      "why_failed": "Wide 35\u201385 bps quoted spreads and $1M\u2013$3M thin retail books turn statistical bounces deeply negative after realistic execution."
+    },
+    {
+      "family": "Preferred Stock Par-Value Liquidation Snapback",
+      "specs_tested": 310,
+      "gross_bps": 9.4,
+      "net_bps": -31.2,
+      "oos_t": -2.09,
+      "why_failed": "Duration shocks and specialist spread widening during rate spikes overwhelm small par-reversion edges."
+    },
+    {
+      "family": "11:30 AM ET European Close ADR / Multinational Reversal",
+      "specs_tested": 420,
+      "gross_bps": 11.4,
+      "net_bps": 1.9,
+      "oos_t": 0.44,
+      "why_failed": "Real microstructure effect (~11 bps gross), but modern cross-border stat-arb pods have compressed it inside Reg NMS spread + slippage."
+    },
+    {
+      "family": "Unbounded Overnight Gap Fades (> 3.5\u03c3 Gaps Up or Down)",
+      "specs_tested": 1480,
+      "gross_bps": -28.4,
+      "net_bps": -51.9,
+      "oos_t": -3.82,
+      "why_failed": "Extreme gaps (> 3\u03c3) contain true information (earnings PEAD, M&A, FDA Phase 3 failures, S-3 offerings) that drift in the gap direction all day."
+    },
+    {
+      "family": "Ticker-Specific 'Routine 09:30\u201309:45 Crash & Reclaim' Mining (SLS-Style)",
+      "specs_tested": 1890,
+      "gross_bps": -13.5,
+      "net_bps": -34.5,
+      "oos_t": -2.76,
+      "why_failed": "Selecting top 'habitual morning dippers' in Train (+62.6 bps) completely inverts Out-of-Sample (-34.5 bps net) once corporate ATM/VWAP programs finish."
+    },
+    {
+      "family": "Unconditional Broad-Universe V5 Accumulation Dip-Buy (Ex-Core-3)",
+      "specs_tested": 940,
+      "gross_bps": 4.9,
+      "net_bps": -7.8,
+      "oos_t": -1.64,
+      "why_failed": "Profitable on FISV/PLNT/NU (+33 bps corrected), but across 245 other stocks intraday VWAP dips lack active corporate buyback absorption."
+    }
+  ]
+}

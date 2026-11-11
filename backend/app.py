@@ -38,6 +38,7 @@ from backend.models import (
     ReconcileTriggerRequest,
 )
 from backend.nvda_monitor import NvdaSignalMonitorService
+from backend.whole_market_scanner import WholeMarketScannerService
 from backend.worker import ScannerManagementWorker
 
 
@@ -92,26 +93,30 @@ def create_app(
     db = DashboardDatabase(db_path) if db_path else DashboardDatabase()
     worker = ScannerManagementWorker(db=db)
     nvda_monitor = NvdaSignalMonitorService(poll_interval_sec=5.0)
+    whole_market_scanner = WholeMarketScannerService(poll_interval_sec=25.0)
 
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI):
         if start_background_worker:
             worker.start_background_loop(interval_seconds=15.0)
             nvda_monitor.start()
+            whole_market_scanner.start()
         try:
             yield
         finally:
+            whole_market_scanner.stop()
             nvda_monitor.stop()
             worker.stop_background_loop()
 
     app = FastAPI(
-        title="Flush & Reclaim V5 — Trader Execution Dashboard",
-        version="5.2.0",
+        title="Flush & Reclaim V5 — Multi-Strategy Quant Workstation",
+        version="5.3.0",
         lifespan=lifespan,
     )
     app.state.db = db
     app.state.worker = worker
     app.state.nvda_monitor = nvda_monitor
+    app.state.whole_market_scanner = whole_market_scanner
 
     app.add_middleware(
         CORSMiddleware,
@@ -165,6 +170,41 @@ def create_app(
         verify_local_mutation_request(request)
         return JSONResponse(
             nvda_monitor.poll_now(),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/whole-market/scan")
+    def get_whole_market_scan(capital: float = 100000.0) -> JSONResponse:
+        return JSONResponse(
+            whole_market_scanner.get_scan_payload(
+                book_capital_usd=capital,
+                force_refresh=False,
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/whole-market/audit")
+    def get_whole_market_audit() -> JSONResponse:
+        return JSONResponse(
+            whole_market_scanner.get_audit_summary(),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/whole-market/refresh")
+    async def refresh_whole_market_scan(request: Request) -> JSONResponse:
+        verify_local_mutation_request(request)
+        capital = 100000.0
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("book_capital_usd") is not None:
+                capital = float(body["book_capital_usd"])
+        except Exception:
+            pass
+        return JSONResponse(
+            whole_market_scanner.get_scan_payload(
+                book_capital_usd=capital,
+                force_refresh=True,
+            ),
             headers={"Cache-Control": "no-store"},
         )
 
@@ -426,6 +466,7 @@ def create_app(
             "api/handoff/open",
             "api/positions/manual",
             "api/nvda/refresh",
+            "api/whole-market/refresh",
         }
         norm_path = full_path.strip("/")
         if norm_path in post_only_routes or (

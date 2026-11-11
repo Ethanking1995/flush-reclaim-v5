@@ -8,11 +8,14 @@ import {
   OrderPlan,
   PositionRecord,
   SymbolChartPayload,
+  WholeMarketAuditSummary,
+  WholeMarketScanPayload,
 } from './types';
 import { SymbolChart } from './components/SymbolChart';
 import { NvdaDashboardView } from './components/NvdaDashboardView';
+import { WholeMarketAuditView } from './components/WholeMarketAuditView';
 
-type WorkspaceView = 'FLUSH' | 'NVDA';
+type WorkspaceView = 'NVDA' | 'FLUSH' | 'AUDIT';
 type NavTab = 'TRADE' | 'JOURNAL' | 'SETTINGS';
 
 const CATEGORY_LABELS: Record<CandidateCategory, string> = {
@@ -41,7 +44,9 @@ export const App: React.FC = () => {
   const [chartData, setChartData] = useState<SymbolChartPayload | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>(() => {
     const v = (initialParams.get('view') || initialParams.get('tab') || '').toUpperCase();
-    return v === 'NVDA' ? 'NVDA' : 'FLUSH';
+    if (v === 'NVDA') return 'NVDA';
+    if (v === 'AUDIT' || v === 'WHOLE' || v === 'SCANNER') return 'AUDIT';
+    return 'FLUSH';
   });
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     const t = (initialParams.get('tab') || 'TRADE').toUpperCase();
@@ -49,6 +54,11 @@ export const App: React.FC = () => {
   });
   const [nvdaState, setNvdaState] = useState<NvdaMonitorState | null>(null);
   const [nvdaRefreshing, setNvdaRefreshing] = useState<boolean>(false);
+  const [wmScan, setWmScan] = useState<WholeMarketScanPayload | null>(null);
+  const [wmAudit, setWmAudit] = useState<WholeMarketAuditSummary | null>(null);
+  const [wmBookCapital, setWmBookCapital] = useState<number>(100000);
+  const [wmRefreshing, setWmRefreshing] = useState<boolean>(false);
+  const [wmAutoPoll, setWmAutoPoll] = useState<boolean>(true);
   const [nvdaAudioEnabled, setNvdaAudioEnabled] = useState<boolean>(false);
   const [flushAlertsEnabled, setFlushAlertsEnabled] = useState<boolean>(false);
   const nvdaAudioCtxRef = useRef<AudioContext | null>(null);
@@ -346,16 +356,90 @@ export const App: React.FC = () => {
     }
   }, [applyNvdaPayload]);
 
+  const fetchWholeMarketScan = useCallback(async (capital: number) => {
+    try {
+      const res = await fetch(
+        `/api/whole-market/scan?capital=${encodeURIComponent(String(capital))}`,
+        { cache: 'no-store' }
+      );
+      if (res.ok) {
+        const data: WholeMarketScanPayload = await res.json();
+        setWmScan(data);
+      }
+    } catch {
+      // ignore transient poll error
+    }
+  }, []);
+
+  const fetchWholeMarketAudit = useCallback(async () => {
+    try {
+      const res = await fetch('/api/whole-market/audit', { cache: 'no-store' });
+      if (res.ok) {
+        const data: WholeMarketAuditSummary = await res.json();
+        setWmAudit(data);
+      }
+    } catch {
+      // ignore transient error
+    }
+  }, []);
+
+  const handleForceRefreshWholeMarket = useCallback(async () => {
+    setWmRefreshing(true);
+    try {
+      const res = await fetch('/api/whole-market/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-FlushReclaim-Confirm': 'true',
+        },
+        body: JSON.stringify({ book_capital_usd: wmBookCapital }),
+      });
+      if (res.ok) {
+        const data: WholeMarketScanPayload = await res.json();
+        setWmScan(data);
+      }
+    } catch {
+      // ignore transient error
+    } finally {
+      setWmRefreshing(false);
+    }
+  }, [wmBookCapital]);
+
+  const handleChangeBookCapital = useCallback(
+    (nextCap: number) => {
+      setWmBookCapital(nextCap);
+      fetchWholeMarketScan(nextCap);
+    },
+    [fetchWholeMarketScan]
+  );
+
   const handleSwitchView = useCallback((view: WorkspaceView) => {
     setActiveView(view);
     const url = new URL(window.location.href);
     if (view === 'NVDA') {
       url.searchParams.set('view', 'nvda');
+    } else if (view === 'AUDIT') {
+      url.searchParams.set('view', 'audit');
     } else {
       url.searchParams.delete('view');
     }
     window.history.replaceState({}, '', url.toString());
   }, []);
+
+  useEffect(() => {
+    fetchWholeMarketAudit();
+  }, [fetchWholeMarketAudit]);
+
+  useEffect(() => {
+    fetchWholeMarketScan(wmBookCapital);
+    if (initialParams.get('nosse') === '1' || !wmAutoPoll) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      fetchWholeMarketScan(wmBookCapital);
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [fetchWholeMarketScan, wmBookCapital, wmAutoPoll, initialParams]);
 
   useEffect(() => {
     fetchNvdaState();
@@ -783,96 +867,228 @@ export const App: React.FC = () => {
       ? 'PREMKT'
       : 'WATCH';
 
-  return (
-    <div className="app-shell">
-      {/* ==================== TOP HEADER BAR ==================== */}
-      <header className="top-header">
-        <div className="brand-and-nav">
-          <div className="brand-block">
-            <span className="brand-dot" />
-            <div>
-              <h1 className="brand-title">FLUSH &amp; RECLAIM V5</h1>
-              <span className="brand-subtitle tabular">
-                Personal Execution Workstation · {snapshot.server_time_et}
-              </span>
-            </div>
-          </div>
+  const flushReadyCount = snapshot.grouped_candidates.READY_FOR_REVIEW?.length || 0;
+  const flushWatchingCount = snapshot.grouped_candidates.WATCHING?.length || 0;
+  const wmLiveCount = wmScan?.total_active_or_forming ?? 0;
 
-          {/* Workspace View Switcher (Flush & Reclaim <-> NVDA Signal Monitor) */}
-          <div
-            className="workspace-switcher"
-            role="tablist"
-            aria-label="Dashboard Workspace Switcher"
+  return (
+    <div className="app-shell app-shell-lhs">
+      {/* ==================== PERSISTENT 3-ITEM LHS NAVIGATION RAIL ==================== */}
+      <aside className="lhs-nav-rail" aria-label="Primary Workspace Navigation">
+        <div className="lhs-brand-box">
+          <span className="brand-dot" />
+          <div>
+            <h1 className="lhs-brand-title">QUANT DESK OS</h1>
+            <span className="lhs-brand-sub tabular">{snapshot.server_time_et}</span>
+          </div>
+        </div>
+
+        <nav className="lhs-nav-list" role="navigation" aria-label="Workstation Views">
+          {/* 1. NVDA monitor */}
+          <button
+            type="button"
+            className={`lhs-nav-item ${activeView === 'NVDA' ? 'active' : ''} sev-${nvdaSeverity}`}
+            onClick={() => handleSwitchView('NVDA')}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeView === 'FLUSH'}
-              className={`ws-toggle-btn ${activeView === 'FLUSH' ? 'active' : ''}`}
-              onClick={() => handleSwitchView('FLUSH')}
-            >
-              <span>Flush &amp; Reclaim</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeView === 'NVDA'}
-              className={`ws-toggle-btn ws-nvda-btn ${
-                activeView === 'NVDA' ? 'active' : ''
-              } sev-${nvdaSeverity}`}
-              onClick={() => handleSwitchView('NVDA')}
-            >
-              <span>NVDA Monitor</span>
-              {nvdaState?.ok && nvdaState.nvda && (
-                <span className="ws-nvda-live tabular">
-                  ${nvdaState.nvda.last.toFixed(2)}
-                </span>
-              )}
+            <div className="lhs-item-top">
+              <span className="lhs-item-label">NVDA monitor</span>
               <span className={`ws-nvda-pill pill-sev-${nvdaSeverity}`}>
                 {nvdaShortBadge}
               </span>
-            </button>
+            </div>
+            <div className="lhs-item-sub tabular">
+              <span>CRWV / SOXL Tailwind</span>
+              {nvdaState?.ok && nvdaState.nvda && (
+                <strong>${nvdaState.nvda.last.toFixed(2)}</strong>
+              )}
+            </div>
+          </button>
+
+          {/* 2. Flush monitor */}
+          <button
+            type="button"
+            className={`lhs-nav-item ${activeView === 'FLUSH' ? 'active' : ''}`}
+            onClick={() => handleSwitchView('FLUSH')}
+          >
+            <div className="lhs-item-top">
+              <span className="lhs-item-label">Flush monitor</span>
+              <span
+                className={`lhs-count-pill ${
+                  flushReadyCount > 0 ? 'pill-ready' : 'pill-watch'
+                } tabular`}
+              >
+                {flushReadyCount > 0
+                  ? `${flushReadyCount} READY`
+                  : `${flushWatchingCount} WATCH`}
+              </span>
+            </div>
+            <div className="lhs-item-sub tabular">
+              <span>V5 Rule 10b-18 Reclaim</span>
+              <strong>{snapshot.spy_gate.gate_status}</strong>
+            </div>
+          </button>
+
+          {/* 3. Whole market audit */}
+          <button
+            type="button"
+            className={`lhs-nav-item ${activeView === 'AUDIT' ? 'active' : ''}`}
+            onClick={() => handleSwitchView('AUDIT')}
+          >
+            <div className="lhs-item-top">
+              <span className="lhs-item-label">Whole market audit</span>
+              <span
+                className={`lhs-count-pill ${
+                  wmLiveCount > 0 ? 'pill-ready' : 'pill-watch'
+                } tabular`}
+              >
+                {wmLiveCount} LIVE
+              </span>
+            </div>
+            <div className="lhs-item-sub tabular">
+              <span>5-Sleeve Scanner · 10.5k</span>
+              <strong>
+                {wmScan ? `${(wmScan.quotes_received / 1000).toFixed(1)}k US` : '4.7k US'}
+              </strong>
+            </div>
+          </button>
+        </nav>
+
+        <div className="lhs-rail-footer tabular">
+          <div className="lhs-spy-card">
+            <div className="lhs-spy-row">
+              <span>SPY Benchmark</span>
+              <strong>${snapshot.spy_gate.last.toFixed(2)}</strong>
+            </div>
+            <div className="lhs-spy-sub">
+              {snapshot.spy_gate.vs_vwap_pct >= 0 ? '+' : ''}
+              {snapshot.spy_gate.vs_vwap_pct.toFixed(2)}% vs VWAP · Gate:{' '}
+              {snapshot.spy_gate.gate_status}
+            </div>
           </div>
 
-          {activeView === 'FLUSH' && (
-            <nav className="primary-nav" aria-label="Primary Navigation">
-              <button
-                type="button"
-                className={`nav-tab ${activeTab === 'TRADE' ? 'active' : ''}`}
-                onClick={() => setActiveTab('TRADE')}
-              >
-                Trade
-              </button>
-              <button
-                type="button"
-                className={`nav-tab ${activeTab === 'JOURNAL' ? 'active' : ''}`}
-                onClick={() => setActiveTab('JOURNAL')}
-              >
-                Journal ({snapshot.events.length})
-              </button>
-              <button
-                type="button"
-                className={`nav-tab ${activeTab === 'SETTINGS' ? 'active' : ''}`}
-                onClick={() => setActiveTab('SETTINGS')}
-              >
-                Settings
-              </button>
-            </nav>
-          )}
-        </div>
-
-        <div className="header-status-strip">
-          {/* Operating Mode Badge */}
-          <span
-            className={`status-pill mode-pill mode-${snapshot.operating_mode.toLowerCase()}`}
-            title="Current Operating Mode"
+          <button
+            type="button"
+            className={`lhs-alert-btn ${
+              nvdaAudioEnabled || flushAlertsEnabled ? 'armed' : ''
+            }`}
+            onClick={() => {
+              const next = !(nvdaAudioEnabled || flushAlertsEnabled);
+              if (next !== nvdaAudioEnabled) handleToggleNvdaAudio();
+              handleToggleFlushAlerts(next);
+            }}
           >
-            Mode: <strong>{snapshot.operating_mode}</strong>
-          </span>
+            {nvdaAudioEnabled || flushAlertsEnabled
+              ? '🔔 Audio + Desktop ARMED'
+              : '🔔 Enable Audio Alerts'}
+          </button>
 
-          {/* Fixture / Data Source Quick Switcher */}
-          <div className="fixture-switcher">
-            <label htmlFor="fixture-select" className="sr-only">
+          <div className="lhs-conn-line">
+            <span className={`conn-dot ${sseConnected ? 'ok' : 'warn'}`} />
+            <span>{sseConnected ? 'SSE Live Connected' : 'SSE Reconnecting'}</span>
+            <button
+              type="button"
+              className="btn-chime-mini"
+              onClick={() => playNvdaAlertChime('SIGNAL')}
+              title="Test Signal Chime"
+            >
+              🔊
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ==================== RIGHT MAIN WORKSPACE PANE ==================== */}
+      <div className="workspace-content-shell">
+        {bannerNotice && (
+          <div className={`notice-banner notice-${bannerNotice.kind}`}>
+            <span>{bannerNotice.text}</span>
+            <button
+              type="button"
+              className="btn-close-notice"
+              onClick={() => setBannerNotice(null)}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* ==================== VIEW 1: NVDA MONITOR ==================== */}
+        {activeView === 'NVDA' && (
+          <NvdaDashboardView
+            state={nvdaState}
+            audioEnabled={nvdaAudioEnabled}
+            onToggleAudio={handleToggleNvdaAudio}
+            onTestChime={() => playNvdaAlertChime('SIGNAL')}
+            onRefresh={handleForceRefreshNvda}
+            isRefreshing={nvdaRefreshing}
+          />
+        )}
+
+        {/* ==================== VIEW 3: WHOLE MARKET AUDIT & MULTI-STRAT SCANNER ==================== */}
+        {activeView === 'AUDIT' && (
+          <WholeMarketAuditView
+            scan={wmScan}
+            audit={wmAudit}
+            bookCapital={wmBookCapital}
+            onChangeBookCapital={handleChangeBookCapital}
+            onRefreshScan={handleForceRefreshWholeMarket}
+            isRefreshing={wmRefreshing}
+            autoPoll={wmAutoPoll}
+            onToggleAutoPoll={() => setWmAutoPoll((v) => !v)}
+            onCopyNotify={(msg) => setBannerNotice({ kind: 'info', text: msg })}
+          />
+        )}
+
+        {/* ==================== VIEW 2: FLUSH MONITOR CONTEXTUAL HEADER ==================== */}
+        {activeView === 'FLUSH' && (
+          <header className="top-header">
+            <div className="brand-and-nav">
+              <div className="brand-block">
+                <div>
+                  <h2 className="brand-title">FLUSH &amp; RECLAIM V5 MONITOR</h2>
+                  <span className="brand-subtitle tabular">
+                    Intraday 5m VWAP Sweep &amp; Split-Tranche OTOCO Workstation
+                  </span>
+                </div>
+              </div>
+
+              <nav className="primary-nav" aria-label="Flush Monitor Sub-Navigation">
+                <button
+                  type="button"
+                  className={`nav-tab ${activeTab === 'TRADE' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('TRADE')}
+                >
+                  Trade
+                </button>
+                <button
+                  type="button"
+                  className={`nav-tab ${activeTab === 'JOURNAL' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('JOURNAL')}
+                >
+                  Journal ({snapshot.events.length})
+                </button>
+                <button
+                  type="button"
+                  className={`nav-tab ${activeTab === 'SETTINGS' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('SETTINGS')}
+                >
+                  Settings
+                </button>
+              </nav>
+            </div>
+
+            <div className="header-status-strip">
+              {/* Operating Mode Badge */}
+              <span
+                className={`status-pill mode-pill mode-${snapshot.operating_mode.toLowerCase()}`}
+                title="Current Operating Mode"
+              >
+                Mode: <strong>{snapshot.operating_mode}</strong>
+              </span>
+
+              {/* Fixture / Data Source Quick Switcher */}
+              <div className="fixture-switcher">
+                <label htmlFor="fixture-select" className="sr-only">
               Data / Fixture Mode
             </label>
             <select
@@ -933,225 +1149,124 @@ export const App: React.FC = () => {
               : '🟢 Entries Enabled'}
           </button>
 
-          {activeView === 'FLUSH' && (
-            <>
-              {/* Flush & Reclaim Audio + Desktop Alerts Toggle */}
-              <button
-                type="button"
-                className={`btn-toggle-alerts ${
-                  flushAlertsEnabled ? 'armed' : ''
-                }`}
-                onClick={() => handleToggleFlushAlerts()}
-                title="Enable WebAudio chimes and browser desktop notifications for Flush & Reclaim ARMED and READY_FOR_REVIEW signals"
-              >
-                {flushAlertsEnabled
-                  ? '🔔 Alerts ARMED (Audio + Desktop)'
-                  : '🔔 Enable Audio + Desktop Alerts'}
-              </button>
-
+              {/* Technical Diagnostics Disclosure Button */}
               <button
                 type="button"
                 className="btn-ghost-xs"
-                onClick={() => playNvdaAlertChime('SIGNAL')}
-                title="Test Flush & Reclaim Signal Chime"
+                onClick={() => setShowDiagnostics((v) => !v)}
               >
-                🔊 Test Chime
+                {showDiagnostics ? 'Hide Diagnostics' : 'Diagnostics'}
               </button>
-            </>
-          )}
-
-          {/* Technical Diagnostics Disclosure Button */}
-          <button
-            type="button"
-            className="btn-ghost-xs"
-            onClick={() => setShowDiagnostics((v) => !v)}
-          >
-            {showDiagnostics ? 'Hide Diagnostics' : 'Diagnostics'}
-          </button>
-        </div>
-      </header>
-
-      {/* ==================== EXPANDABLE DIAGNOSTICS BAR ==================== */}
-      {showDiagnostics && (
-        <section className="diagnostics-drawer tabular">
-          <div className="diag-grid">
-            <div>
-              <span className="diag-label">Session Schedule:</span>{' '}
-              <strong>{snapshot.session_window_label}</strong>
             </div>
-            <div>
-              <span className="diag-label">Worker Heartbeat:</span>{' '}
-              <strong>
-                {snapshot.worker_health.last_heartbeat_et} (Cycle #
-                {snapshot.worker_health.scan_cycle_count})
-              </strong>{' '}
-              · SSE: {sseConnected ? 'Connected' : 'Reconnecting'}
+          </header>
+        )}
+
+        {/* ==================== EXPANDABLE DIAGNOSTICS BAR ==================== */}
+        {activeView === 'FLUSH' && showDiagnostics && (
+          <section className="diagnostics-drawer tabular">
+            <div className="diag-grid">
+              <div>
+                <span className="diag-label">Session Schedule:</span>{' '}
+                <strong>{snapshot.session_window_label}</strong>
+              </div>
+              <div>
+                <span className="diag-label">Worker Heartbeat:</span>{' '}
+                <strong>
+                  {snapshot.worker_health.last_heartbeat_et} (Cycle #
+                  {snapshot.worker_health.scan_cycle_count})
+                </strong>{' '}
+                · SSE: {sseConnected ? 'Connected' : 'Reconnecting'}
+              </div>
+              <div>
+                <span className="diag-label">Reconciliation Health:</span>{' '}
+                <strong
+                  style={{
+                    color: snapshot.worker_health.reconciliation_healthy
+                      ? '#10b981'
+                      : '#f43f5e',
+                  }}
+                >
+                  {snapshot.worker_health.reconciliation_healthy
+                    ? 'HEALTHY'
+                    : `REQUIRED (${snapshot.worker_health.reconciliation_reason})`}
+                </strong>
+              </div>
+              <div>
+                <span className="diag-label">Worker Persistence:</span>{' '}
+                <span>{snapshot.worker_health.persistence_note}</span>
+              </div>
             </div>
-            <div>
-              <span className="diag-label">Reconciliation Health:</span>{' '}
-              <strong
-                style={{
-                  color: snapshot.worker_health.reconciliation_healthy
-                    ? '#10b981'
-                    : '#f43f5e',
-                }}
+            <div className="diag-actions">
+              <button
+                type="button"
+                className="btn-secondary-xs"
+                onClick={() => postApi('/api/scan')}
               >
-                {snapshot.worker_health.reconciliation_healthy
-                  ? 'HEALTHY'
-                  : `REQUIRED (${snapshot.worker_health.reconciliation_reason})`}
-              </strong>
+                Force Scan Cycle
+              </button>
+              <button
+                type="button"
+                className="btn-secondary-xs"
+                onClick={() => handleReconcile(false)}
+              >
+                Run Account Reconciliation
+              </button>
+              <label className="diag-checkbox">
+                <input
+                  type="checkbox"
+                  checked={simulatePreviewError}
+                  onChange={(e) => setSimulatePreviewError(e.target.checked)}
+                />
+                <span>Simulate Preview Reject</span>
+              </label>
+              <label className="diag-checkbox">
+                <input
+                  type="checkbox"
+                  checked={simulateTimeout}
+                  onChange={(e) => setSimulateTimeout(e.target.checked)}
+                />
+                <span>Simulate Submit Timeout</span>
+              </label>
+              <label className="diag-checkbox">
+                <input
+                  type="checkbox"
+                  checked={simulatePartialFill}
+                  onChange={(e) => setSimulatePartialFill(e.target.checked)}
+                />
+                <span>Simulate 50% Partial Fill</span>
+              </label>
             </div>
+          </section>
+        )}
+
+        {/* ==================== ALERT / RECONCILIATION BANNERS ==================== */}
+        {activeView === 'FLUSH' && !snapshot.worker_health.reconciliation_healthy && (
+          <div className="critical-reconcile-banner">
             <div>
-              <span className="diag-label">Worker Persistence:</span>{' '}
-              <span>{snapshot.worker_health.persistence_note}</span>
+              <strong>⚠️ RECONCILIATION REQUIRED BEFORE NEW ORDERS:</strong>{' '}
+              {snapshot.worker_health.reconciliation_reason}
             </div>
-          </div>
-          <div className="diag-actions">
             <button
               type="button"
-              className="btn-secondary-xs"
-              onClick={() => postApi('/api/scan')}
-            >
-              Force Scan Cycle
-            </button>
-            <button
-              type="button"
-              className="btn-secondary-xs"
+              className="btn-primary-xs"
               onClick={() => handleReconcile(false)}
             >
-              Run Account Reconciliation
+              Reconcile &amp; Verify Protective Stops Now
             </button>
-            <label className="diag-checkbox">
-              <input
-                type="checkbox"
-                checked={simulatePreviewError}
-                onChange={(e) => setSimulatePreviewError(e.target.checked)}
-              />
-              <span>Simulate Preview Reject</span>
-            </label>
-            <label className="diag-checkbox">
-              <input
-                type="checkbox"
-                checked={simulateTimeout}
-                onChange={(e) => setSimulateTimeout(e.target.checked)}
-              />
-              <span>Simulate Submit Timeout</span>
-            </label>
-            <label className="diag-checkbox">
-              <input
-                type="checkbox"
-                checked={simulatePartialFill}
-                onChange={(e) => setSimulatePartialFill(e.target.checked)}
-              />
-              <span>Simulate 50% Partial Fill</span>
-            </label>
           </div>
-        </section>
-      )}
+        )}
 
-      {/* ==================== ALERT / RECONCILIATION BANNERS ==================== */}
-      {!snapshot.worker_health.reconciliation_healthy && (
-        <div className="critical-reconcile-banner">
-          <div>
-            <strong>⚠️ RECONCILIATION REQUIRED BEFORE NEW ORDERS:</strong>{' '}
-            {snapshot.worker_health.reconciliation_reason}
-          </div>
-          <button
-            type="button"
-            className="btn-primary-xs"
-            onClick={() => handleReconcile(false)}
-          >
-            Reconcile &amp; Verify Protective Stops Now
-          </button>
-        </div>
-      )}
-
-      {bannerNotice && (
-        <div className={`notice-banner notice-${bannerNotice.kind}`}>
-          <span>{bannerNotice.text}</span>
-          <button
-            type="button"
-            className="btn-close-notice"
-            onClick={() => setBannerNotice(null)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* ==================== NVDA SIGNAL MONITOR VIEW ==================== */}
-      {activeView === 'NVDA' && (
-        <NvdaDashboardView
-          state={nvdaState}
-          audioEnabled={nvdaAudioEnabled}
-          onToggleAudio={handleToggleNvdaAudio}
-          onTestChime={() => playNvdaAlertChime('SIGNAL')}
-          onRefresh={handleForceRefreshNvda}
-          isRefreshing={nvdaRefreshing}
-        />
-      )}
-
-      {/* ==================== MAIN CONTENT AREA ==================== */}
-      {activeView === 'FLUSH' && activeTab === 'TRADE' && (
-        <main className="trade-workspace">
-          {/* ---------- LEFT COLUMN: CANDIDATE LIST ---------- */}
-          <aside className="candidate-sidebar" aria-label="Monitored Universe">
-            {/* Pinned LHS Navigation Item for Special NVDA Playbook */}
-            <div className="lhs-playbook-section">
-              <div className="group-header lhs-playbook-header">
-                <span>Special Playbooks</span>
-                <span className="group-count tabular">1</span>
+        {/* ==================== MAIN CONTENT AREA (FLUSH MONITOR) ==================== */}
+        {activeView === 'FLUSH' && activeTab === 'TRADE' && (
+          <main className="trade-workspace">
+            {/* ---------- LEFT COLUMN: CANDIDATE LIST ---------- */}
+            <aside className="candidate-sidebar" aria-label="Monitored Universe">
+              <div className="panel-header">
+                <h2>Universe Candidates ({snapshot.candidates.length})</h2>
+                <span className="panel-subtitle tabular">
+                  5m Bar-Close Evaluation
+                </span>
               </div>
-              <div
-                role="button"
-                tabIndex={0}
-                className={`lhs-nvda-nav-item sev-${nvdaSeverity}`}
-                onClick={() => handleSwitchView('NVDA')}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    handleSwitchView('NVDA');
-                  }
-                }}
-              >
-                <div className="cand-row-top">
-                  <span className="cand-symbol">NVDA Playbook</span>
-                  <span className="cand-price tabular">
-                    {nvdaState?.ok && nvdaState.nvda
-                      ? `$${nvdaState.nvda.last.toFixed(2)}`
-                      : 'Live'}
-                  </span>
-                </div>
-                <div className="cand-row-mid">
-                  <span className={`ws-nvda-pill pill-sev-${nvdaSeverity}`}>
-                    {nvdaShortBadge}
-                  </span>
-                  {nvdaState?.ok && nvdaState.nvda && (
-                    <span
-                      className="tabular"
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        color:
-                          nvdaState.nvda.chg_pct >= 0 ? '#34d399' : '#f87171',
-                      }}
-                    >
-                      {nvdaState.nvda.chg_pct >= 0 ? '+' : ''}
-                      {nvdaState.nvda.chg_pct.toFixed(2)}%
-                    </span>
-                  )}
-                </div>
-                <div className="cand-reason">
-                  CRWV &amp; SOXL Tailwind · Open Monitor →
-                </div>
-              </div>
-            </div>
-
-            <div className="panel-header">
-              <h2>Universe Candidates ({snapshot.candidates.length})</h2>
-              <span className="panel-subtitle tabular">
-                5m Bar-Close Evaluation
-              </span>
-            </div>
 
             <div className="candidate-groups">
               {CATEGORY_ORDER.map((cat) => {
@@ -2422,6 +2537,7 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };
