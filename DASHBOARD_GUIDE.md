@@ -29,7 +29,7 @@ The web dashboard and the existing CLI ([`test_regimes.py`](file:///Users/ethank
 ### Start the Web Dashboard (Single Command)
 
 ```bash
-./start_dashboard.sh
+./start.sh
 ```
 
 Then open **`http://127.0.0.1:8000`** in your browser.

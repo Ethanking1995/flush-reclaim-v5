@@ -183,14 +183,25 @@ def normalize_to_ny_tz(df: pd.DataFrame) -> pd.DataFrame:
         else:
             idx = idx.tz_convert(NY_TZ)
     else:
-        try:
-            idx = pd.to_datetime(out.index)
-            if idx.tz is None:
-                idx = idx.tz_localize(NY_TZ)
-            else:
-                idx = idx.tz_convert(NY_TZ)
-        except ValueError:
+        sample = str(out.index[0]) if len(out.index) > 0 else ""
+        has_offset = (
+            sample.endswith("Z")
+            or ("+" in sample[10:])
+            or ("-" in sample[10:])
+        )
+        if has_offset:
             idx = pd.to_datetime(out.index, utc=True).tz_convert(NY_TZ)
+        else:
+            try:
+                idx = pd.to_datetime(out.index)
+                if not isinstance(idx, pd.DatetimeIndex):
+                    idx = pd.to_datetime(out.index, utc=True).tz_convert(NY_TZ)
+                elif idx.tz is None:
+                    idx = idx.tz_localize(NY_TZ)
+                else:
+                    idx = idx.tz_convert(NY_TZ)
+            except (ValueError, AttributeError):
+                idx = pd.to_datetime(out.index, utc=True).tz_convert(NY_TZ)
     out.index = idx
     return out
 

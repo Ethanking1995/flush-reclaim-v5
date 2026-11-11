@@ -12,8 +12,11 @@ export interface GateEvidence {
   status: GateStatus;
   observed_value: string;
   required_threshold: string;
+  threshold?: string;
   timestamp_et: string;
   explanation: string;
+  summary?: string;
+  details?: string;
 }
 
 export interface ConsistencyCheck {

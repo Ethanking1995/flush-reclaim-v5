@@ -111,10 +111,20 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(ALLOWED_LOCAL_ORIGINS),
+        allow_origin_regex=r"^http://(127\.0\.0\.1|localhost)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type", "X-FlushReclaim-Confirm"],
     )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"Internal server error on {request.method} {request.url.path}: {type(exc).__name__}: {exc}",
+            },
+        )
 
     # ==========================================================================
     # READ-ONLY GET ENDPOINTS (Never mutate or submit orders)

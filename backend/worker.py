@@ -901,282 +901,792 @@ class ScannerManagementWorker:
     def _run_live_market_scan(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Evaluate live market data through the authoritative `strategy_engine.py`,
-        with fallback to frozen baseline data if offline.
+        evaluating decisions strictly on completed 5m bars (`bar_open + 5m <= now_et`)
+        while rendering forming 5m bars (`is_completed=False`) and live quotes,
+        with clean fallback to frozen baseline data if offline.
         """
         now_et = datetime.now(NY_TZ)
+        now_ts = pd.Timestamp(now_et)
         now_str = now_et.strftime("%Y-%m-%d %H:%M:%S %Z")
-        all_syms = ["SPY"] + [t.upper() for t in tickers]
+        clean_tickers = [str(t).upper().strip() for t in tickers if str(t).strip()]
+        all_syms = ["SPY"] + [s for s in clean_tickers if s != "SPY"]
 
         quote_map = fetch_cnbc_quote_observations(all_syms, now_et=now_et)
-        spy_5m, spy_prov = fetch_cnbc_ohlcv_bars("SPY", interval="5m", days=20, now_et=now_et)
+        spy_5m, spy_prov = fetch_cnbc_ohlcv_bars("SPY", interval="5m", days=30, now_et=now_et)
         spy_1d, _ = fetch_cnbc_ohlcv_bars("SPY", interval="1d", days=370, now_et=now_et)
 
+        spy_used_archive = False
         if spy_5m.empty or spy_1d.empty:
             spy_5m = load_baseline_ohlcv("SPY", "5m")
             spy_1d = load_baseline_ohlcv("SPY", "1d")
+            spy_used_archive = True
 
         if spy_5m.empty or spy_1d.empty:
             return self._build_fixture_candidates("demo_ready")
 
-        spy_5m_feat = compute_causal_spy_features(spy_5m, self.strategy_cfg)
-        last_spy_ts = spy_5m_feat.index[-1]
-        spy_info = lookup_spy_state_at_bar(
+        spy_5m_feat = compute_causal_spy_features(spy_5m)
+        if spy_5m_feat.empty:
+            return self._build_fixture_candidates("demo_ready")
+
+        spy_session_date = spy_5m_feat["Date"].iloc[-1]
+        spy_day_df = spy_5m_feat[spy_5m_feat["Date"] == spy_session_date]
+        spy_comp_df = spy_day_df[(spy_day_df.index + pd.Timedelta(minutes=5)) <= now_ts]
+        if spy_comp_df.empty:
+            spy_comp_df = spy_day_df
+        last_spy_comp_ts = spy_comp_df.index[-1]
+
+        spy_status, spy_ok, spy_ret3, spy_vdist = lookup_spy_state_at_bar(
             spy_5m_feat,
-            last_spy_ts,
-            now_et=last_spy_ts.to_pydatetime(),
-            cfg=self.strategy_cfg,
+            last_spy_comp_ts,
+            self.strategy_cfg,
         )
-        last_spy_row = spy_5m_feat.iloc[-1]
+        last_spy_row = spy_day_df.iloc[-1]
+        spy_q = quote_map.get("SPY") if not spy_used_archive else None
+        spy_last_px = round(
+            float(spy_q.last if (spy_q and spy_session_date == now_et.date()) else last_spy_row["Close"]),
+            2,
+        )
+        spy_vwap_px = round(float(last_spy_row["SPY_VWAP"]), 2)
+        spy_vs_vwap_pct = (
+            round((spy_last_px - spy_vwap_px) / spy_vwap_px * 100.0, 2)
+            if spy_vwap_px > 0
+            else 0.0
+        )
+        spy_dd_pct = (
+            round(float(last_spy_row["SPY_DropFromHigh"]) * 100.0, 2)
+            if pd.notna(last_spy_row["SPY_DropFromHigh"])
+            else 0.0
+        )
+        spy_max_dd_pct = (
+            round(float(spy_day_df["SPY_DropFromHigh"].min()) * 100.0, 2)
+            if (not spy_day_df.empty and spy_day_df["SPY_DropFromHigh"].notna().any())
+            else spy_dd_pct
+        )
+        spy_obs_ts_str = (
+            spy_q.provenance.observation_timestamp_et
+            if spy_q
+            else last_spy_row.name.strftime("%Y-%m-%d %H:%M:%S %Z")
+        )
+        spy_age_s = (
+            spy_q.provenance.age_seconds
+            if spy_q
+            else (spy_prov.age_seconds if spy_prov else 5.0)
+        )
+
         self._spy_banner = {
             "symbol": "SPY",
-            "last": round(float(last_spy_row["Close"]), 2),
-            "vwap": round(float(last_spy_row["VWAP"]), 2),
-            "last_price": round(float(last_spy_row["Close"]), 2),
-            "session_vwap": round(float(last_spy_row["VWAP"]), 2),
-            "vs_vwap_pct": round(float(last_spy_row["BelowVWAP"]) * 100.0, 2),
-            "drawdown_from_high_pct": round(float(last_spy_row["DropFromHigh"]) * 100.0, 2),
-            "max_intraday_drop_pct": round(float(spy_5m_feat[spy_5m_feat["Date"] == last_spy_ts.date()]["DropFromHigh"].min()) * 100.0, 2),
-            "gate_status": "PASS" if spy_info["status"] == "HEALTHY" else ("FAIL" if spy_info["status"] == "WATERFALL_BLOCKED" else "UNKNOWN"),
-            "status_label": (
-                f"SPY Tape Healthy ({float(last_spy_row['BelowVWAP']) * 100.0:+.2f}% vs VWAP)"
-                if spy_info["status"] == "HEALTHY"
-                else f"SPY Gate: {spy_info['status']}"
+            "last": spy_last_px,
+            "vwap": spy_vwap_px,
+            "last_price": spy_last_px,
+            "session_vwap": spy_vwap_px,
+            "vs_vwap_pct": spy_vs_vwap_pct,
+            "drawdown_from_high_pct": spy_dd_pct,
+            "max_intraday_drop_pct": spy_max_dd_pct,
+            "gate_status": (
+                "PASS"
+                if spy_status in ("HEALTHY", "FILTER_DISABLED")
+                else ("FAIL" if spy_status == "WATERFALL_BLOCKED" else "UNKNOWN")
             ),
-            "observation_timestamp_et": last_spy_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "age_seconds": spy_prov.age_seconds if spy_prov else 5.0,
+            "status_label": (
+                f"SPY Tape Healthy ({spy_vs_vwap_pct:+.2f}% vs VWAP)"
+                if spy_status in ("HEALTHY", "FILTER_DISABLED")
+                else f"SPY Gate: {spy_status}"
+            ),
+            "observation_timestamp_et": spy_obs_ts_str,
+            "age_seconds": round(float(spy_age_s), 1),
         }
 
         candidates: Dict[str, Dict[str, Any]] = {}
-        for sym in tickers:
-            sym = sym.upper()
-            df_5m, bar_prov = fetch_cnbc_ohlcv_bars(sym, interval="5m", days=25, now_et=now_et)
-            df_1d, _ = fetch_cnbc_ohlcv_bars(sym, interval="1d", days=370, now_et=now_et)
-            if df_5m.empty or df_1d.empty:
-                df_5m = load_baseline_ohlcv(sym, "5m")
-                df_1d = load_baseline_ohlcv(sym, "1d")
-            if df_5m.empty or df_1d.empty:
-                continue
+        for sym in clean_tickers:
+            try:
+                df_5m, bar_prov = fetch_cnbc_ohlcv_bars(sym, interval="5m", days=30, now_et=now_et)
+                df_1d, _ = fetch_cnbc_ohlcv_bars(sym, interval="1d", days=370, now_et=now_et)
+                used_archive = False
+                if df_5m.empty or df_1d.empty:
+                    df_5m = load_baseline_ohlcv(sym, "5m")
+                    df_1d = load_baseline_ohlcv(sym, "1d")
+                    used_archive = True
+                if df_5m.empty or df_1d.empty:
+                    continue
 
-            daily_table = compute_daily_regime_table(df_1d, spy_1d, self.strategy_cfg)
-            feat_5m = compute_causal_5m_features(df_5m, self.strategy_cfg)
-            session_date = feat_5m["Date"].iloc[-1]
-            day_df = feat_5m[feat_5m["Date"] == session_date].copy()
-            if day_df.empty:
-                continue
-
-            regime_info = lookup_causal_daily_regime(daily_table, session_date)
-            er_res = self.earnings_oracle.check_blackout(sym, session_date, use_filter=True)
-            eval_res = evaluate_session_causal(
-                ticker=sym,
-                day_df=day_df,
-                session_date=session_date,
-                prior_day_accum=regime_info["prior_day_accum"],
-                developing_next_day_accum=regime_info["developing_next_day_accum"],
-                er_result=er_res,
-                spy_5m_featured=spy_5m_feat,
-                calendar=self.calendar,
-                strat_cfg=self.strategy_cfg,
-                exec_cfg=self.exec_cfg,
-                risk_cfg=self.risk_cfg,
-                now_et=now_et,
-            )
-
-            last_row = day_df.iloc[-1]
-            completed_df = day_df.iloc[:-1] if len(day_df) > 1 else day_df
-            last_comp_ts = completed_df.index[-1]
-            last_comp_close_ts = last_comp_ts + timedelta(minutes=5)
-
-            bar_obs = QuoteObservation(
-                symbol=sym,
-                last=float(last_row["Close"]),
-                bid=None,
-                ask=None,
-                open_price=float(day_df["Open"].iloc[0]),
-                day_high=float(day_df["High"].max()),
-                day_low=float(day_df["Low"].min()),
-                day_volume=float(day_df["Volume"].sum()),
-                provenance=bar_prov or DataProvenance(
-                    vendor_id="cnbc",
-                    endpoint_id="cnbc_harmony_bars",
-                    observation_timestamp_et=last_row.name.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                    fetch_timestamp_et=now_str,
-                    age_seconds=5.0,
-                    is_delayed=False,
-                    delay_seconds=0,
-                    update_mode="polling_snapshot",
-                ),
-            )
-            q_obs = quote_map.get(sym)
-            consistency = evaluate_observation_consistency(bar_obs, q_obs)
-
-            flush_low_val = eval_res.flush_low if np.isfinite(eval_res.flush_low) else float(day_df["Low"].min())
-            mhigh_val = float(last_row["MorningHigh"])
-            vwap_val = float(last_row["VWAP"])
-            flush_pct = round((flush_low_val - mhigh_val) / mhigh_val * 100.0, 2)
-            vs_vwap_pct = round((float(last_row["Close"]) - vwap_val) / vwap_val * 100.0, 2)
-
-            # Map gates
-            g_daily = GateResultModel(
-                gate_id="daily_regime",
-                gate_name="Daily Accumulation & Earnings Rule",
-                status=GateStatus.PASS if (regime_info["prior_day_accum"] and not er_res.is_blocked) else GateStatus.FAIL,
-                observed_value=f"Prior Accum={regime_info['prior_day_accum']} | Earnings={er_res.display_label}",
-                threshold="Prior-day accumulation True & >14d to earnings",
-                timestamp_et=str(regime_info.get("prior_completed_date") or session_date),
-                summary=(
-                    f"Blocked by strategy 14-day pre-earnings restriction ({er_res.display_label})."
-                    if er_res.is_blocked
-                    else ("Prior completed daily session is in accumulation." if regime_info["prior_day_accum"] else "Prior completed daily session is not in accumulation.")
-                ),
-                details=f"Prior session: {regime_info.get('prior_completed_date')} | Developing next-day: {regime_info['developing_next_day_accum']}",
-            )
-            g_session = GateResultModel(
-                gate_id="session_window",
-                gate_name="NYSE Entry Window & Data Freshness",
-                status=GateStatus.PASS if consistency.status != "FAIL" else GateStatus.FAIL,
-                observed_value=now_et.strftime("%H:%M:%S %Z"),
-                threshold="RTH 09:50–13:00 ET & Consistent Observations",
-                timestamp_et=now_str,
-                summary=consistency.explanation,
-                details=f"Calendar status: {self.calendar.session_label(session_date)}",
-            )
-            g_spy = GateResultModel(
-                gate_id="spy_macro",
-                gate_name="SPY Intraday Waterfall Gate",
-                status=GateStatus.PASS if spy_info["status"] == "HEALTHY" else GateStatus.FAIL,
-                observed_value=self._spy_banner["status_label"],
-                threshold="SPY healthy",
-                timestamp_et=self._spy_banner["observation_timestamp_et"],
-                summary=self._spy_banner["status_label"],
-                details=f"SPY Last ${self._spy_banner['last_price']:.2f} vs Session VWAP ${self._spy_banner['session_vwap']:.2f}",
-            )
-            g_flush = GateResultModel(
-                gate_id="flush_depth",
-                gate_name="Morning Flush Depth vs. High & VWAP",
-                status=GateStatus.PASS if flush_pct <= -1.10 else GateStatus.FAIL,
-                observed_value=f"{flush_pct:+.2f}% from High (${flush_low_val:.2f} vs ${mhigh_val:.2f})",
-                threshold="<= -1.10% from Morning High & <= -0.35% vs VWAP",
-                timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                summary=f"Intraday low ${flush_low_val:.2f} is {flush_pct:+.2f}% from ${mhigh_val:.2f} Morning High.",
-                details=f"Session VWAP: ${vwap_val:.2f} ({vs_vwap_pct:+.2f}%)",
-            )
-            g_vol = GateResultModel(
-                gate_id="volume_climax",
-                gate_name="Intraday Volume Climax",
-                status=GateStatus.PASS if eval_res.climax_mult >= 1.80 else GateStatus.FAIL,
-                observed_value=f"{eval_res.climax_mult:.1f}x baseline",
-                threshold=">= 1.80x VolMA10_ExOpen",
-                timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                summary=f"Peak flush volume multiplier is {eval_res.climax_mult:.1f}x.",
-                details="09:30 and 09:35 bars excluded from VolMA10_ExOpen baseline.",
-            )
-            is_ready = eval_res.status == "ENTRY_SIGNAL_NOW" and consistency.status != "FAIL"
-            g_reclaim = GateResultModel(
-                gate_id="reclaim_confirmation",
-                gate_name="Completed 5m Higher-Low Green Reclaim Bar",
-                status=GateStatus.PASS if is_ready else GateStatus.FAIL,
-                observed_value=eval_res.status,
-                threshold="Completed 5m green higher-low reclaim bar",
-                timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                summary=eval_res.why_diagnosis,
-                details=f"Evaluated on completed 5m candle closing at {last_comp_close_ts.strftime('%H:%M:%S %Z')}.",
-            )
-
-            if consistency.status == "FAIL":
-                cat = CandidateCategory.DATA_UNAVAILABLE
-                badge = "Feed Divergence"
-                reason = consistency.explanation
-            elif er_res.is_blocked:
-                cat = CandidateCategory.BLOCKED
-                badge = "Blocked · Earnings Rule"
-                reason = f"Strategy 14d pre-earnings restriction ({er_res.display_label})"
-            elif not regime_info["prior_day_accum"]:
-                cat = CandidateCategory.BLOCKED
-                badge = "Blocked · No Daily Accum"
-                reason = "Daily accumulation criterion unmet on prior completed session"
-            elif is_ready:
-                cat = CandidateCategory.READY_FOR_REVIEW
-                badge = "Ready for Review"
-                reason = eval_res.why_diagnosis
-            elif eval_res.status == "ARMED_FLUSHING":
-                cat = CandidateCategory.WATCHING
-                badge = "Watching · Armed"
-                reason = "Flush & climax met; awaiting completed 5m green higher-low reclaim bar"
-            else:
-                cat = CandidateCategory.WATCHING
-                badge = "Watching · Eligible"
-                reason = eval_res.why_diagnosis
-
-            sig_id = eval_res.signal_id or hashlib.sha256(
-                f"{sym}|{session_date}|{last_comp_close_ts.isoformat()}|v5.0-audited".encode("utf-8")
-            ).hexdigest()[:16]
-
-            cand_dict = {
-                "signal_id": sig_id,
-                "signal_version": 1,
-                "symbol": sym,
-                "session_date": str(session_date),
-                "signal_state": SignalState.READY_FOR_REVIEW.value if is_ready else eval_res.status,
-                "category": cat.value,
-                "primary_status_badge": badge,
-                "concise_reason": reason,
-                "signal_time_et": last_comp_close_ts.strftime("%H:%M:%S %Z") if is_ready else None,
-                "signal_age_seconds": 15.0 if is_ready else None,
-                "is_actionable": is_ready,
-                "actionability_reason": "All 6 gates satisfied." if is_ready else f"Execution unavailable: {reason}",
-                "observation_time_et": now_str,
-                "bar_open_et": last_comp_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                "bar_close_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                "fetch_time_et": now_str,
-                "decision_time_et": now_str,
-                "strategy_version": "v5.0-audited",
-                "last_price": round(float(last_row["Close"]), 2),
-                "session_vwap": round(vwap_val, 2),
-                "vs_vwap_pct": vs_vwap_pct,
-                "morning_high": round(mhigh_val, 2),
-                "flush_low": round(flush_low_val, 2),
-                "flush_pct": flush_pct,
-                "volume_climax_mult": round(float(eval_res.climax_mult), 2),
-                "why_now_or_missing": eval_res.why_diagnosis,
-                "gates": [g.model_dump() for g in (g_daily, g_session, g_spy, g_flush, g_vol, g_reclaim)],
-                "reference_trigger_price": round(flush_low_val * 1.0025, 2),
-                "reference_trigger_timestamp_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                "reference_trigger_meaning": "Reference +0.25% bounce above flush low (informational only).",
-                "consistency_check": consistency.to_dict(),
-                "provenance": bar_obs.provenance.to_dict(),
-            }
-            candidates[sym] = cand_dict
-            self.db.save_signal(cand_dict)
-
-            # Build chart bars
-            bars_list = []
-            for idx_b, (ts_b, r_b) in enumerate(day_df.iterrows()):
-                b_close = ts_b + timedelta(minutes=5)
-                bars_list.append(
-                    {
-                        "time": int(ts_b.timestamp()),
-                        "bar_open_et": ts_b.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                        "bar_close_et": b_close.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                        "open": round(float(r_b["Open"]), 2),
-                        "high": round(float(r_b["High"]), 2),
-                        "low": round(float(r_b["Low"]), 2),
-                        "close": round(float(r_b["Close"]), 2),
-                        "volume": int(r_b["Volume"]),
-                        "vwap": round(float(r_b["VWAP"]), 2),
-                        "ema12": round(float(r_b["EMA12"]), 2),
-                        "ema20": round(float(r_b["EMA20"]), 2),
-                        "is_completed": idx_b < len(day_df) - 1,
-                    }
+                daily_table = compute_daily_regime_table(
+                    df_1d,
+                    cfg=self.strategy_cfg,
+                    df_spy_1d=spy_1d,
                 )
-            self._chart_cache[sym] = {
-                "symbol": sym,
-                "bars": bars_list,
-                "markers": [],
-                "levels": [],
-                "last_completed_bar_close_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                "forming_bar_open_et": day_df.index[-1].strftime("%Y-%m-%d %H:%M:%S %Z"),
-            }
-            self._ensure_order_plan_for_candidate(cand_dict)
+                feat_5m = compute_causal_5m_features(
+                    df_5m,
+                    cfg=self.strategy_cfg,
+                    calendar=self.calendar,
+                )
+                if feat_5m.empty:
+                    continue
+
+                session_date = feat_5m["Date"].iloc[-1]
+                day_df = feat_5m[feat_5m["Date"] == session_date].copy()
+                if day_df.empty:
+                    continue
+
+                comp_mask = (day_df.index + pd.Timedelta(minutes=5)) <= now_ts
+                completed_df = day_df[comp_mask]
+                has_forming_bar = bool((~comp_mask).any())
+                if completed_df.empty:
+                    completed_df = day_df.iloc[:1]
+
+                last_comp_ts = completed_df.index[-1]
+                last_comp_close_ts = last_comp_ts + pd.Timedelta(minutes=5)
+
+                prior_dt, prior_accum_ok, dev_next_accum = lookup_causal_daily_regime(
+                    daily_table,
+                    session_date,
+                )
+                er_res = self.earnings_oracle.check_blackout(
+                    sym,
+                    session_date,
+                    use_filter=self.strategy_cfg.use_er_blackout_filter,
+                )
+                eval_res = evaluate_session_causal(
+                    symbol=sym,
+                    session_date=session_date,
+                    df_1d=df_1d,
+                    df_5m=df_5m,
+                    df_spy_5m=spy_5m,
+                    cfg=self.strategy_cfg,
+                    exec_cfg=self.exec_cfg,
+                    risk_cfg=self.risk_cfg,
+                    earnings_oracle=self.earnings_oracle,
+                    calendar=self.calendar,
+                    as_of_ts=last_comp_ts,
+                    precomputed_daily_table=daily_table,
+                    precomputed_feat_5m=feat_5m,
+                    precomputed_spy_feat=spy_5m_feat,
+                )
+
+                last_row = day_df.iloc[-1]
+                q_obs = quote_map.get(sym) if not used_archive else None
+
+                if used_archive:
+                    eff_bar_prov = DataProvenance(
+                        vendor_id="baseline_archive",
+                        endpoint_id="frozen_csv_gz",
+                        observation_timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                        fetch_timestamp_et=now_str,
+                        age_seconds=round(max(0.0, (now_ts - last_comp_close_ts).total_seconds()), 1),
+                        is_delayed=False,
+                        delay_seconds=0,
+                        update_mode="historical_archive",
+                    )
+                elif has_forming_bar:
+                    eff_bar_prov = DataProvenance(
+                        vendor_id="cnbc",
+                        endpoint_id="cnbc_harmony_bars",
+                        observation_timestamp_et=now_str,
+                        fetch_timestamp_et=now_str,
+                        age_seconds=2.5,
+                        is_delayed=False,
+                        delay_seconds=0,
+                        update_mode="polling_snapshot",
+                    )
+                else:
+                    eff_bar_prov = DataProvenance(
+                        vendor_id="cnbc",
+                        endpoint_id="cnbc_harmony_bars",
+                        observation_timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                        fetch_timestamp_et=now_str,
+                        age_seconds=round(max(0.0, (now_ts - last_comp_close_ts).total_seconds()), 1),
+                        is_delayed=False,
+                        delay_seconds=0,
+                        update_mode="polling_snapshot",
+                    )
+
+                bar_obs = QuoteObservation(
+                    symbol=sym,
+                    last=float(last_row["Close"]),
+                    bid=None,
+                    ask=None,
+                    open_price=float(day_df["Open"].iloc[0]),
+                    day_high=float(day_df["High"].max()),
+                    day_low=float(day_df["Low"].min()),
+                    day_volume=float(day_df["Volume"].sum()),
+                    provenance=eff_bar_prov,
+                )
+                primary_obs = q_obs if q_obs is not None else bar_obs
+                secondary_obs = bar_obs if q_obs is not None else None
+                consistency = evaluate_observation_consistency(primary_obs, secondary_obs)
+
+                live_last = (
+                    float(q_obs.last)
+                    if (q_obs is not None and session_date == now_et.date())
+                    else float(last_row["Close"])
+                )
+                flush_low_val = (
+                    float(eval_res.flush_low)
+                    if (eval_res.flush_low is not None and np.isfinite(eval_res.flush_low))
+                    else float(day_df["Low"].min())
+                )
+                mhigh_val = max(float(last_row["Morning_High"]), float(day_df["High"].max()))
+                vwap_val = float(last_row["VWAP"])
+                flush_pct = round((flush_low_val - mhigh_val) / mhigh_val * 100.0, 2) if mhigh_val > 0 else 0.0
+                vs_vwap_pct = round((live_last - vwap_val) / vwap_val * 100.0, 2) if vwap_val > 0 else 0.0
+
+                last_comp_row = completed_df.iloc[-1]
+                comp_vol_ratio = (
+                    float(last_comp_row["Volume"]) / max(1.0, float(last_comp_row["VolMA10_ExOpen"]))
+                )
+                climax_mult_val = (
+                    float(eval_res.climax_vol_ratio)
+                    if eval_res.climax_vol_ratio is not None
+                    else round(comp_vol_ratio, 2)
+                )
+                vol_climax_met = eval_res.climax_vol_ratio is not None
+
+                sched = self.calendar.get_session_schedule(session_date)
+                in_rth_entry_window = bool(
+                    not used_archive
+                    and session_date == now_et.date()
+                    and sched.is_trading_day
+                    and sched.entry_start_et is not None
+                    and sched.entry_end_et is not None
+                    and (sched.entry_start_et <= now_et <= (sched.entry_end_et + timedelta(minutes=5)))
+                )
+                past_entry_window = bool(
+                    session_date == now_et.date()
+                    and sched.entry_end_et is not None
+                    and now_et > (sched.entry_end_et + timedelta(minutes=5))
+                )
+
+                is_ready = bool(
+                    eval_res.is_executable_now
+                    and eval_res.status == "ENTRY_SIGNAL_NOW"
+                    and eval_res.active_signal_plan is not None
+                    and consistency.status != "FAIL"
+                    and in_rth_entry_window
+                )
+
+                # Build plain-language diagnosis and status badges from `SessionEvaluationResult`
+                if consistency.status == "FAIL":
+                    cat = CandidateCategory.DATA_UNAVAILABLE
+                    sig_state = SignalState.DATA_UNAVAILABLE.value
+                    badge = "Feed Divergence"
+                    reason = consistency.explanation
+                    why_text = consistency.explanation
+                elif er_res.is_blocked:
+                    cat = CandidateCategory.BLOCKED
+                    sig_state = SignalState.BLOCKED.value
+                    badge = "Blocked · Earnings Rule"
+                    reason = f"Strategy 14d pre-earnings restriction ({er_res.display_label})"
+                    why_text = (
+                        f"Blocked from new entries by the strategy's 14-day pre-earnings restriction "
+                        f"({er_res.display_label})."
+                    )
+                elif not prior_accum_ok:
+                    cat = CandidateCategory.BLOCKED
+                    sig_state = SignalState.BLOCKED.value
+                    badge = "Blocked · No Daily Accum"
+                    reason = f"Daily accumulation unmet on prior session ({prior_dt or 'N/A'})"
+                    why_text = (
+                        f"Blocked from new entries because prior completed daily session ({prior_dt or 'N/A'}) "
+                        f"did not satisfy institutional accumulation criteria."
+                    )
+                elif eval_res.status == "INSUFFICIENT_HISTORY":
+                    cat = CandidateCategory.DATA_UNAVAILABLE
+                    sig_state = SignalState.DATA_UNAVAILABLE.value
+                    badge = "Insufficient ToD History"
+                    reason = f"Fewer than {self.strategy_cfg.min_tod_history_sessions} prior 5m sessions"
+                    why_text = (
+                        f"{sym} has fewer than {self.strategy_cfg.min_tod_history_sessions} prior sessions "
+                        f"of 5m volume history required for causal ToD volume baselines."
+                    )
+                elif eval_res.status == "BLOCKED_SPY":
+                    cat = CandidateCategory.BLOCKED
+                    sig_state = SignalState.BLOCKED.value
+                    badge = "Blocked · SPY Macro Gate"
+                    reason = f"SPY intraday waterfall filter active ({spy_status})"
+                    why_text = f"New entries paused because SPY intraday macro filter is {spy_status}."
+                elif eval_res.status == "REJECTED_STOP_CAP":
+                    cat = CandidateCategory.BLOCKED
+                    sig_state = SignalState.BLOCKED.value
+                    badge = "Blocked · Risk/Stop Cap"
+                    reason = f"Rejected by stop/risk cap ({eval_res.rejection_reason})"
+                    why_text = (
+                        f"Intraday reclaim bar formed, but order sizing was rejected by risk limits: "
+                        f"{eval_res.rejection_reason}."
+                    )
+                elif is_ready and eval_res.active_signal_plan is not None:
+                    cat = CandidateCategory.READY_FOR_REVIEW
+                    sig_state = SignalState.READY_FOR_REVIEW.value
+                    badge = "Ready for Review"
+                    reason = (
+                        f"Confirmed 5m {eval_res.active_signal_plan.reclaim_type} @ "
+                        f"${eval_res.active_signal_plan.entry_price:.2f} ({climax_mult_val:.1f}x vol)"
+                    )
+                    why_text = f"Why now: {eval_res.active_signal_plan.why_diagnosis}"
+                elif eval_res.status == "IN_POSITION" and eval_res.open_position is not None:
+                    cat = CandidateCategory.WATCHING
+                    sig_state = SignalState.WATCHING_ELIGIBLE.value
+                    op = eval_res.open_position
+                    t_lbl = op.entry_bar_end_ts[11:16] if len(op.entry_bar_end_ts) >= 16 else op.entry_bar_end_ts
+                    badge = "Watching · Prior Signal Active"
+                    reason = f"Triggered earlier @ ${op.entry_signal_price:.2f} ({t_lbl} ET); max 1 entry/session"
+                    why_text = (
+                        f"Morning Flush & Reclaim signal triggered earlier today at {t_lbl} ET "
+                        f"(@ ${op.entry_signal_price:.2f}). Strategy allows at most 1 entry per symbol per session; "
+                        f"manage active position protection until 15:40 ET flatten cutoff."
+                    )
+                elif eval_res.status == "TRADED_COMPLETED" and eval_res.completed_trades:
+                    cat = CandidateCategory.WATCHING
+                    sig_state = SignalState.WATCHING_ELIGIBLE.value
+                    tr = eval_res.completed_trades[-1]
+                    t_lbl = tr.entry_bar_end_ts[11:16] if len(tr.entry_bar_end_ts) >= 16 else tr.entry_bar_end_ts
+                    badge = "Watching · Session Cycle Done"
+                    reason = f"Earlier {t_lbl} ET setup completed ({tr.exit_reason}); max 1 entry/session"
+                    why_text = (
+                        f"Morning Flush & Reclaim setup triggered earlier today at {t_lbl} ET "
+                        f"(@ ${tr.entry_signal_price:.2f}) and completed its intraday cycle ({tr.exit_reason}). "
+                        f"Max 1 trade per symbol per session."
+                    )
+                elif eval_res.status == "ARMED_FLUSHING":
+                    cat = CandidateCategory.WATCHING
+                    if vol_climax_met:
+                        sig_state = SignalState.WATCHING_ARMED.value
+                        badge = "Watching · Armed"
+                        reason = f"Flush {flush_pct:+.2f}% & {climax_mult_val:.1f}x climax met; awaiting green 5m HL close"
+                        why_text = (
+                            f"What is missing: {sym} flushed {flush_pct:+.2f}% from ${mhigh_val:.2f} Morning High "
+                            f"to ${flush_low_val:.2f} with a {climax_mult_val:.1f}x volume climax, and is awaiting "
+                            f"a completed 5m green higher-low reclaim bar."
+                        )
+                    else:
+                        sig_state = SignalState.WATCHING_FLUSHING.value
+                        badge = "Watching · Developing Flush"
+                        reason = f"Flushing {flush_pct:+.2f}% from High; awaiting >= 1.8x volume climax"
+                        why_text = (
+                            f"What is missing: {sym} has flushed {flush_pct:+.2f}% from ${mhigh_val:.2f} Morning High "
+                            f"to ${flush_low_val:.2f}, but selling volume ({climax_mult_val:.1f}x) has not yet reached "
+                            f"the >= 1.8x climax threshold."
+                        )
+                elif past_entry_window:
+                    cat = CandidateCategory.WATCHING
+                    sig_state = SignalState.WATCHING_ELIGIBLE.value
+                    badge = "Watching · Window Closed"
+                    reason = f"Past 13:00 ET entry cutoff (Last ${live_last:.2f}, {vs_vwap_pct:+.2f}% vs VWAP)"
+                    why_text = (
+                        f"NYSE active new-entry window (09:50–13:00 ET) has closed for {session_date}. "
+                        f"Monitoring live price (${live_last:.2f} vs ${vwap_val:.2f} Session VWAP) and open positions "
+                        f"until 15:40 ET mandatory flatten."
+                    )
+                else:
+                    cat = CandidateCategory.WATCHING
+                    sig_state = SignalState.WATCHING_ELIGIBLE.value
+                    badge = "Watching · Eligible"
+                    reason = f"Eligible; awaiting <= -1.10% flush below VWAP (currently {flush_pct:+.2f}%)"
+                    why_text = (
+                        f"What is missing: {sym} satisfies prior-day accumulation and earnings rules, currently trading "
+                        f"at ${live_last:.2f} ({vs_vwap_pct:+.2f}% vs ${vwap_val:.2f} VWAP, {flush_pct:+.2f}% from "
+                        f"${mhigh_val:.2f} Morning High). Waiting for a >= 1.10% morning flush + 1.8x volume climax."
+                    )
+
+                # Build the 6 structured gates
+                g_daily = GateResultModel(
+                    gate_id="daily_regime",
+                    gate_name="Daily Accumulation & Earnings Rule",
+                    status=GateStatus.PASS if (prior_accum_ok and not er_res.is_blocked) else GateStatus.FAIL,
+                    observed_value=(
+                        f"Strategy 14d Pre-Earnings Restriction: {er_res.display_label}"
+                        if er_res.is_blocked
+                        else (
+                            f"Accumulation Active (Prior: {prior_dt}) · ER: {er_res.display_label}"
+                            if prior_accum_ok
+                            else f"Accumulation Unmet (Prior: {prior_dt})"
+                        )
+                    ),
+                    threshold="Prior-day accumulation True & >14d to earnings",
+                    timestamp_et=f"{prior_dt} 16:00:00 ET" if prior_dt else str(session_date),
+                    summary=(
+                        f"Blocked by strategy 14-day pre-earnings restriction ({er_res.display_label})."
+                        if er_res.is_blocked
+                        else (
+                            "Prior completed daily session is in accumulation."
+                            if prior_accum_ok
+                            else "Prior completed daily session is not in accumulation."
+                        )
+                    ),
+                    details=f"Prior session: {prior_dt} | Developing next-day: {dev_next_accum} | Earnings: {er_res.display_label}",
+                )
+                g_session = GateResultModel(
+                    gate_id="session_window",
+                    gate_name="NYSE Entry Window & Data Freshness",
+                    status=(
+                        GateStatus.FAIL
+                        if (consistency.status == "FAIL" or not in_rth_entry_window)
+                        else GateStatus.PASS
+                    ),
+                    observed_value=(
+                        f"{now_et.strftime('%H:%M:%S %Z')} ({'Active 09:50–13:00 ET' if in_rth_entry_window else ('Archive Fallback' if used_archive else 'Outside 09:50–13:00 ET Entry Window')})"
+                    ),
+                    threshold="RTH 09:50–13:00 ET & Consistent Observations",
+                    timestamp_et=now_str,
+                    summary=(
+                        consistency.explanation
+                        if in_rth_entry_window
+                        else (
+                            "Outside the 09:50–13:00 ET new-entry window (existing positions remain managed until 15:40 ET)."
+                            if past_entry_window
+                            else f"Session status: {self.calendar.session_label(session_date)}"
+                        )
+                    ),
+                    details=f"{self.calendar.session_label(session_date)} | {consistency.explanation}",
+                )
+                g_spy = GateResultModel(
+                    gate_id="spy_macro",
+                    gate_name="SPY Intraday Waterfall Gate",
+                    status=(
+                        GateStatus.PASS
+                        if spy_status in ("HEALTHY", "FILTER_DISABLED")
+                        else (GateStatus.FAIL if spy_status == "WATERFALL_BLOCKED" else GateStatus.UNKNOWN)
+                    ),
+                    observed_value=self._spy_banner["status_label"],
+                    threshold="Not (SPY Drop <= -1.00% from High AND <= -0.35% below VWAP)",
+                    timestamp_et=self._spy_banner["observation_timestamp_et"],
+                    summary=self._spy_banner["status_label"],
+                    details=f"SPY Last ${spy_last_px:.2f} vs Session VWAP ${spy_vwap_px:.2f} ({spy_vs_vwap_pct:+.2f}%)",
+                )
+                flush_gate_ok = bool(
+                    (eval_res.max_flush_drop_pct is not None and eval_res.max_flush_drop_pct <= self.strategy_cfg.min_flush_drop_pct)
+                    and (eval_res.max_vwap_discount_pct is not None and eval_res.max_vwap_discount_pct <= self.strategy_cfg.min_vwap_discount_pct)
+                )
+                g_flush = GateResultModel(
+                    gate_id="flush_depth",
+                    gate_name="Morning Flush Depth vs. High & VWAP",
+                    status=GateStatus.PASS if flush_gate_ok else GateStatus.FAIL,
+                    observed_value=f"{flush_pct:+.2f}% from High (${flush_low_val:.2f} vs ${mhigh_val:.2f}), {vs_vwap_pct:+.2f}% vs VWAP",
+                    threshold="<= -1.10% from Morning High & <= -0.35% vs Session VWAP",
+                    timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    summary=f"Intraday low ${flush_low_val:.2f} is {flush_pct:+.2f}% from ${mhigh_val:.2f} Morning High.",
+                    details=f"Session VWAP: ${vwap_val:.2f} ({vs_vwap_pct:+.2f}%)",
+                )
+                g_vol = GateResultModel(
+                    gate_id="volume_climax",
+                    gate_name="Intraday Volume Climax",
+                    status=GateStatus.PASS if vol_climax_met else GateStatus.FAIL,
+                    observed_value=(
+                        f"{climax_mult_val:.1f}x climax volume"
+                        if vol_climax_met
+                        else f"{climax_mult_val:.1f}x latest bar (no flush climax yet)"
+                    ),
+                    threshold=">= 1.80x VolMA10_ExOpen (or >= 1.65x ToD Median Volume)",
+                    timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    summary=(
+                        f"Flush volume climax confirmed at {climax_mult_val:.1f}x baseline."
+                        if vol_climax_met
+                        else "No qualifying volume climax bar recorded during a flush yet."
+                    ),
+                    details="09:30 and 09:35 bars excluded from VolMA10_ExOpen baseline while included in Session VWAP.",
+                )
+                g_reclaim = GateResultModel(
+                    gate_id="reclaim_confirmation",
+                    gate_name="Completed 5m Higher-Low Green Reclaim Bar",
+                    status=GateStatus.PASS if is_ready else GateStatus.FAIL,
+                    observed_value=(
+                        f"Confirmed @ ${eval_res.active_signal_plan.entry_price:.2f}"
+                        if (is_ready and eval_res.active_signal_plan is not None)
+                        else eval_res.status
+                    ),
+                    threshold="Completed 5m green higher-low reclaim bar inside 09:50–13:00 ET",
+                    timestamp_et=last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    summary=why_text,
+                    details=f"Evaluated strictly on completed 5m candle closing at {last_comp_close_ts.strftime('%H:%M:%S %Z')}.",
+                )
+
+                sig_plan = eval_res.active_signal_plan
+                sig_id = (
+                    sig_plan.signal_id
+                    if sig_plan is not None
+                    else hashlib.sha256(
+                        f"{sym}|{session_date}|{last_comp_close_ts.isoformat()}|v5.0-audited|live".encode("utf-8")
+                    ).hexdigest()[:16]
+                )
+
+                cand_dict = {
+                    "signal_id": sig_id,
+                    "signal_version": 1,
+                    "symbol": sym,
+                    "session_date": str(session_date),
+                    "signal_state": sig_state,
+                    "category": cat.value,
+                    "primary_status_badge": badge,
+                    "concise_reason": reason,
+                    "signal_time_et": last_comp_close_ts.strftime("%H:%M:%S %Z") if is_ready else None,
+                    "confirmed_signal_time_et": last_comp_close_ts.strftime("%H:%M:%S %Z") if is_ready else None,
+                    "signal_age_seconds": round(max(0.0, (now_ts - last_comp_close_ts).total_seconds()), 1) if is_ready else None,
+                    "is_actionable": is_ready,
+                    "actionability_reason": "All 6 gates satisfied on completed 5m bar." if is_ready else f"Execution unavailable: {reason}",
+                    "observation_time_et": primary_obs.provenance.observation_timestamp_et,
+                    "bar_open_et": last_comp_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "bar_close_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "fetch_time_et": now_str,
+                    "decision_time_et": now_str,
+                    "strategy_version": "v5.0-audited",
+                    "last_price": round(live_last, 2),
+                    "session_vwap": round(vwap_val, 2),
+                    "vs_vwap_pct": vs_vwap_pct,
+                    "morning_high": round(mhigh_val, 2),
+                    "flush_low": round(flush_low_val, 2),
+                    "flush_pct": flush_pct,
+                    "volume_climax_mult": round(climax_mult_val, 2),
+                    "why_now_or_missing": why_text,
+                    "gates": [g.model_dump() for g in (g_daily, g_session, g_spy, g_flush, g_vol, g_reclaim)],
+                    "reference_trigger_price": round(flush_low_val * 1.0025, 2),
+                    "reference_trigger_timestamp_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "reference_trigger_meaning": "Reference +0.25% bounce above flush low (informational only; requires completed 5m bar).",
+                    "consistency_check": consistency.to_dict(),
+                    "consistency": consistency.to_dict(),
+                    "provenance": primary_obs.provenance.to_dict(),
+                }
+                candidates[sym] = cand_dict
+                self.db.save_signal(cand_dict)
+
+                # Build chart bars, markers, and price levels
+                bars_list: List[Dict[str, Any]] = []
+                min_low_bar_ts = day_df["Low"].idxmin()
+                markers_list: List[Dict[str, Any]] = []
+
+                earlier_entry_bar_iso: Optional[str] = None
+                earlier_entry_px: Optional[float] = None
+                if sig_plan is not None:
+                    earlier_entry_bar_iso = sig_plan.bar_start_ts
+                    earlier_entry_px = sig_plan.entry_price
+                elif eval_res.open_position is not None:
+                    earlier_entry_bar_iso = eval_res.open_position.entry_bar_start_ts
+                    earlier_entry_px = eval_res.open_position.entry_signal_price
+                elif eval_res.completed_trades:
+                    earlier_entry_bar_iso = eval_res.completed_trades[-1].entry_bar_start_ts
+                    earlier_entry_px = eval_res.completed_trades[-1].entry_signal_price
+
+                for ts_b, r_b in day_df.iterrows():
+                    b_close = ts_b + pd.Timedelta(minutes=5)
+                    is_comp = bool(b_close <= now_ts)
+                    t_epoch = int(ts_b.timestamp())
+                    bars_list.append(
+                        {
+                            "time": t_epoch,
+                            "bar_open_et": ts_b.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                            "bar_close_et": b_close.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                            "open": round(float(r_b["Open"]), 2),
+                            "high": round(float(r_b["High"]), 2),
+                            "low": round(float(r_b["Low"]), 2),
+                            "close": round(live_last if (not is_comp and session_date == now_et.date()) else float(r_b["Close"]), 2),
+                            "volume": int(r_b["Volume"]),
+                            "vwap": round(float(r_b["VWAP"]), 2),
+                            "ema12": round(float(r_b["EMA12"]), 2),
+                            "ema20": round(float(r_b["EMA20"]), 2),
+                            "vol_ma10_ex_open": round(float(r_b["VolMA10_ExOpen"]), 0),
+                            "is_completed": is_comp,
+                        }
+                    )
+                    if ts_b == min_low_bar_ts and flush_gate_ok:
+                        markers_list.append(
+                            {
+                                "time": t_epoch,
+                                "bar_close_et": b_close.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                                "kind": "FLUSH_LOW",
+                                "price": round(float(r_b["Low"]), 2),
+                                "label": f"Flush Low ${float(r_b['Low']):.2f}",
+                                "color": "#f43f5e",
+                            }
+                        )
+                    if eval_res.climax_bar_ts and ts_b.strftime("%H:%M") == eval_res.climax_bar_ts:
+                        markers_list.append(
+                            {
+                                "time": t_epoch,
+                                "bar_close_et": b_close.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                                "kind": "VOLUME_CLIMAX",
+                                "price": round(float(r_b["High"]), 2),
+                                "label": f"Climax {climax_mult_val:.1f}x",
+                                "color": "#f59e0b",
+                            }
+                        )
+                    if earlier_entry_bar_iso and ts_b.isoformat() == earlier_entry_bar_iso and earlier_entry_px is not None:
+                        markers_list.append(
+                            {
+                                "time": t_epoch,
+                                "bar_close_et": b_close.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                                "kind": "CONFIRMED_RECLAIM",
+                                "price": round(float(earlier_entry_px), 2),
+                                "label": f"Reclaim ${float(earlier_entry_px):.2f}",
+                                "color": "#10b981",
+                            }
+                        )
+
+                levels_list: List[Dict[str, Any]] = []
+                if is_ready or eval_res.status == "ARMED_FLUSHING":
+                    entry_ref = (
+                        round(float(sig_plan.entry_price), 2)
+                        if sig_plan is not None
+                        else round(flush_low_val * 1.0025, 2)
+                    )
+                    stop_ref = (
+                        round(float(sig_plan.stop_price), 2)
+                        if sig_plan is not None
+                        else round(
+                            min(
+                                flush_low_val * (1.0 - 0.0005),
+                                max(flush_low_val * (1.0 - 0.0035), entry_ref * (1.0 - 0.0065)),
+                            ),
+                            2,
+                        )
+                    )
+                    leg1_ref = round(max(vwap_val, entry_ref * 1.0040), 2)
+                    leg2_ref = round(entry_ref * 1.0085, 2)
+                    levels_list.extend(
+                        [
+                            {
+                                "level_id": f"{sym}-prop-entry",
+                                "kind": "ENTRY",
+                                "price": entry_ref,
+                                "label": f"[Proposed Plan] Limit Entry ${entry_ref:.2f}",
+                                "source": "PROPOSED_PLAN",
+                            },
+                            {
+                                "level_id": f"{sym}-prop-stop",
+                                "kind": "STOP",
+                                "price": stop_ref,
+                                "label": f"[Proposed Plan] Initial Stop ${stop_ref:.2f}",
+                                "source": "PROPOSED_PLAN",
+                            },
+                            {
+                                "level_id": f"{sym}-prop-leg1",
+                                "kind": "LEG1_TARGET",
+                                "price": leg1_ref,
+                                "label": f"[Proposed Plan] Leg 1 (50% VWAP) ${leg1_ref:.2f}",
+                                "source": "PROPOSED_PLAN",
+                            },
+                            {
+                                "level_id": f"{sym}-prop-leg2",
+                                "kind": "LEG2_TARGET",
+                                "price": leg2_ref,
+                                "label": f"[Proposed Plan] Leg 2 (+0.85%) ${leg2_ref:.2f}",
+                                "source": "PROPOSED_PLAN",
+                            },
+                        ]
+                    )
+
+                for pos in self.db.list_positions():
+                    if pos["symbol"] == sym and pos.get("protection_state") != "CLOSED":
+                        src_tag = (
+                            "BROKER_CONFIRMED_ORDER"
+                            if pos["reconciliation_status"] == "BROKER_VERIFIED"
+                            else "MANUAL_USER_REPORTED"
+                        )
+                        prefix = "[Broker Working]" if src_tag == "BROKER_CONFIRMED_ORDER" else "[User-Reported Manual]"
+                        if pos.get("avg_fill_price"):
+                            levels_list.append(
+                                {
+                                    "level_id": f"{sym}-pos-fill-{pos['position_id']}",
+                                    "kind": "MANUAL_ENTRY",
+                                    "price": float(pos["avg_fill_price"]),
+                                    "label": f"{prefix} Avg Entry ${float(pos['avg_fill_price']):.2f}",
+                                    "source": src_tag,
+                                }
+                            )
+                        if pos.get("working_stop_price"):
+                            levels_list.append(
+                                {
+                                    "level_id": f"{sym}-pos-stop-{pos['position_id']}",
+                                    "kind": "WORKING_STOP",
+                                    "price": float(pos["working_stop_price"]),
+                                    "label": f"{prefix} Stop ${float(pos['working_stop_price']):.2f}",
+                                    "source": src_tag,
+                                }
+                            )
+
+                self._chart_cache[sym] = {
+                    "symbol": sym,
+                    "bars": bars_list,
+                    "markers": markers_list,
+                    "levels": levels_list,
+                    "last_completed_bar_close_et": last_comp_close_ts.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "forming_bar_open_et": (
+                        day_df.index[-1].strftime("%Y-%m-%d %H:%M:%S %Z")
+                        if has_forming_bar
+                        else None
+                    ),
+                }
+                self._ensure_order_plan_for_candidate(cand_dict)
+
+                if is_ready and sig_plan is not None:
+                    self.db.emit_deduped_alert(
+                        dedupe_key=f"sig-{sig_id}",
+                        alert_type="NEW_CONFIRMED_SIGNAL",
+                        severity="SUCCESS",
+                        symbol=sym,
+                        message=(
+                            f"Confirmed 5m {sig_plan.reclaim_type} on {sym} @ ${sig_plan.entry_price:.2f} "
+                            f"({last_comp_close_ts.strftime('%H:%M')} ET bar close). Ready for review."
+                        ),
+                    )
+            except Exception as sym_exc:
+                err_sig_id = hashlib.sha256(
+                    f"{sym}|{now_et.date()}|err|v5.0-audited".encode("utf-8")
+                ).hexdigest()[:16]
+                err_cand = {
+                    "signal_id": err_sig_id,
+                    "signal_version": 1,
+                    "symbol": sym,
+                    "session_date": str(now_et.date()),
+                    "signal_state": SignalState.DATA_UNAVAILABLE.value,
+                    "category": CandidateCategory.DATA_UNAVAILABLE.value,
+                    "primary_status_badge": "Data Unavailable",
+                    "concise_reason": f"Live feed evaluation error: {type(sym_exc).__name__}",
+                    "signal_time_et": None,
+                    "confirmed_signal_time_et": None,
+                    "signal_age_seconds": None,
+                    "is_actionable": False,
+                    "actionability_reason": f"Data error on {sym}: {sym_exc}",
+                    "observation_time_et": now_str,
+                    "bar_open_et": now_str,
+                    "bar_close_et": now_str,
+                    "fetch_time_et": now_str,
+                    "decision_time_et": now_str,
+                    "strategy_version": "v5.0-audited",
+                    "last_price": 0.0,
+                    "session_vwap": 0.0,
+                    "vs_vwap_pct": 0.0,
+                    "morning_high": 0.0,
+                    "flush_low": 0.0,
+                    "flush_pct": 0.0,
+                    "volume_climax_mult": 0.0,
+                    "why_now_or_missing": f"Live market data evaluation failed for {sym}: {type(sym_exc).__name__}: {sym_exc}",
+                    "gates": [],
+                    "reference_trigger_price": None,
+                    "reference_trigger_timestamp_et": None,
+                    "reference_trigger_meaning": "Unavailable until live bars load.",
+                    "consistency_check": {
+                        "status": "FAIL",
+                        "comparison_basis": "ERROR",
+                        "is_independent_provider": False,
+                        "provider_relationship": "NONE",
+                        "provenance_relation": "NONE",
+                        "primary_price": None,
+                        "secondary_price": None,
+                        "spread_pct": None,
+                        "threshold_pct": 0.25,
+                        "observation_skew_seconds": None,
+                        "explanation": f"Error loading live market data for {sym}: {sym_exc}",
+                    },
+                    "consistency": {},
+                    "provenance": {
+                        "vendor_id": "cnbc",
+                        "endpoint_id": "error",
+                        "observation_timestamp_et": now_str,
+                        "fetch_timestamp_et": now_str,
+                        "age_seconds": 0.0,
+                        "is_delayed": False,
+                        "delay_seconds": 0,
+                        "update_mode": "polling_snapshot",
+                    },
+                }
+                candidates[sym] = err_cand
 
         return candidates
 

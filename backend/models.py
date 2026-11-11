@@ -7,7 +7,7 @@ Typed Pydantic v2 request and response models for the Flush & Reclaim Web Dashbo
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class OperatingMode(str, Enum):
@@ -37,9 +37,19 @@ class GateResultModel(BaseModel):
     status: GateStatus
     observed_value: str
     threshold: str
+    required_threshold: Optional[str] = None
     timestamp_et: str
     summary: str
+    explanation: Optional[str] = None
     details: str
+
+    @model_validator(mode="after")
+    def _populate_frontend_aliases(self) -> "GateResultModel":
+        if not self.required_threshold:
+            self.required_threshold = self.threshold
+        if not self.explanation:
+            self.explanation = self.summary
+        return self
 
 
 class CandleBarModel(BaseModel):

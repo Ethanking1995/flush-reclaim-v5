@@ -244,9 +244,21 @@ export const App: React.FC = () => {
       },
       body: JSON.stringify(body),
     });
-    const data = await res.json();
+    const rawText = await res.text();
+    let data: Record<string, any> = {};
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(
+          res.ok
+            ? 'Received invalid JSON response from local server.'
+            : `Server error (${res.status}): ${rawText.slice(0, 180)}`
+        );
+      }
+    }
     if (!res.ok) {
-      throw new Error(data.detail || 'Request failed');
+      throw new Error(String(data.detail || `Request failed (${res.status})`));
     }
     if (data.snapshot) {
       setSnapshot(data.snapshot);
@@ -1045,7 +1057,7 @@ export const App: React.FC = () => {
                           Observed: <strong>{g.observed_value}</strong>
                         </div>
                         <div className="gate-threshold tabular">
-                          Required: {g.required_threshold}
+                          Required: {g.required_threshold || g.threshold}
                         </div>
                       </div>
                     ))}

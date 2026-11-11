@@ -678,6 +678,58 @@ class TestWebDashboardAcceptance(unittest.TestCase):
                     continue
                 self.assertAlmostEqual(float(v_full), float(v_pref), places=6)
 
+    # --------------------------------------------------------------------------
+    # 17. Live Market Feed Mode Switch & Causal Engine Pipeline Regression
+    # --------------------------------------------------------------------------
+    def test_17_live_market_feed_mode_switch_and_causal_pipeline(self) -> None:
+        """
+        Regression test for switching `fixture_mode` to `'live'` via `POST /api/settings`:
+        - Returns HTTP 200 valid JSON (never HTTP 500 plain text).
+        - Evaluates all 6 symbols through `compute_causal_spy_features`, `lookup_spy_state_at_bar`,
+          `compute_daily_regime_table`, `lookup_causal_daily_regime`, and `evaluate_session_causal`.
+        - Populates `required_threshold` on every gate card and generates valid chart payloads
+          and order plans both with live network polling and offline baseline fallback.
+        """
+        from unittest.mock import patch
+
+        # 1. Deterministic offline fallback path through the full `_run_live_market_scan` code path
+        with patch("backend.worker.fetch_cnbc_quote_observations", return_value={}), patch(
+            "backend.worker.fetch_cnbc_ohlcv_bars", return_value=(pd.DataFrame(), None)
+        ):
+            r_offline = self.client.post(
+                "/api/settings",
+                json={"fixture_mode": "live"},
+                headers=self.headers,
+            )
+            self.assertEqual(r_offline.status_code, 200)
+            snap_off = r_offline.json()["snapshot"]
+            self.assertEqual(snap_off["fixture_mode"], "live")
+            self.assertIn("last", snap_off["spy_gate"])
+            self.assertEqual(len(snap_off["candidates"]), 6)
+            for cand in snap_off["candidates"]:
+                self.assertGreater(len(cand["gates"]), 0)
+                for g in cand["gates"]:
+                    self.assertTrue(bool(g.get("required_threshold")))
+                ch = self.client.get(f"/api/chart/{cand['symbol']}").json()
+                self.assertGreater(len(ch["bars"]), 0)
+                self.assertIn("vol_ma10_ex_open", ch["bars"][0])
+
+        # 2. Unmocked live mode switch (`POST /api/settings` -> `{"fixture_mode": "live"}`)
+        r_live = self.client.post(
+            "/api/settings",
+            json={"fixture_mode": "live"},
+            headers=self.headers,
+        )
+        self.assertEqual(r_live.status_code, 200)
+        snap_live = r_live.json()["snapshot"]
+        self.assertEqual(snap_live["fixture_mode"], "live")
+        self.assertEqual(len(snap_live["candidates"]), 6)
+        cands_by_sym = {c["symbol"]: c for c in snap_live["candidates"]}
+        for sym in ("FISV", "PLNT", "EEFT", "CNC", "GPN", "NU"):
+            self.assertIn(sym, cands_by_sym)
+            self.assertNotEqual(cands_by_sym[sym]["primary_status_badge"], "Data Unavailable")
+            self.assertIn(sym, snap_live["order_plans_by_symbol"])
+
 
 if __name__ == "__main__":
     unittest.main()
