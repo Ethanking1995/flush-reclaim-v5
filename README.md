@@ -11,7 +11,8 @@ Intraday 5-minute **Flush & Reclaim** quantitative strategy engine (`V1` through
    - **Hard Stop:** `<= -0.35%` below `FlushLow` (capped at `-0.65%` from entry).
    - **Leg 1 (50%):** Scales out at `max(VWAP, EntryPrice * 1.0040)` and moves the stop on Leg 2 to breakeven.
    - **Leg 2 (50%):** Takes `+0.85%` target OR activates the Afternoon Runner (trailing 5m `EMA20` up to `+1.60%` stretch target when the breakout candle closes `>= +0.75%` and above `EMA12`), with a mandatory flatten at `15:40 EST` (10 minutes before the `15:50 EST` Rule 10b-18 buyback cutoff).
-6. **Local Web Execution Workstation & Split-Tranche OTOCO Bridge:** FastAPI + SQLite background scanner serving a live SSE React workstation with versioned order plans, clipboard tickets, and optional Tastytrade Split-Tranche OTOCO preflight/submission.
+6. **Local Web Execution Workstation & Split-Tranche OTOCO Bridge:** FastAPI + SQLite background scanner serving a live SSE React workstation with versioned order plans, clipboard tickets, WebAudio + desktop browser notifications, and optional Tastytrade Split-Tranche OTOCO preflight/submission.
+7. **Integrated NVDA Signal Monitor Playbook (`?view=nvda`):** Built-in top workspace switcher & LHS playbook link toggling instantaneously between the multi-ticker Flush & Reclaim workstation and the real-time NVDA / CRWV / SOXL 5-minute signal monitor with persistent cross-view audio and desktop alerts.
 
 ---
 

@@ -4,12 +4,15 @@ import {
   CandidateCategory,
   CandidateRow,
   DashboardSnapshot,
+  NvdaMonitorState,
   OrderPlan,
   PositionRecord,
   SymbolChartPayload,
 } from './types';
 import { SymbolChart } from './components/SymbolChart';
+import { NvdaDashboardView } from './components/NvdaDashboardView';
 
+type WorkspaceView = 'FLUSH' | 'NVDA';
 type NavTab = 'TRADE' | 'JOURNAL' | 'SETTINGS';
 
 const CATEGORY_LABELS: Record<CandidateCategory, string> = {
@@ -36,9 +39,26 @@ export const App: React.FC = () => {
     (initialParams.get('symbol') || 'FISV').toUpperCase()
   );
   const [chartData, setChartData] = useState<SymbolChartPayload | null>(null);
-  const [activeTab, setActiveTab] = useState<NavTab>(
-    ((initialParams.get('tab') || 'TRADE').toUpperCase() as NavTab) || 'TRADE'
-  );
+  const [activeView, setActiveView] = useState<WorkspaceView>(() => {
+    const v = (initialParams.get('view') || initialParams.get('tab') || '').toUpperCase();
+    return v === 'NVDA' ? 'NVDA' : 'FLUSH';
+  });
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    const t = (initialParams.get('tab') || 'TRADE').toUpperCase();
+    return t === 'JOURNAL' || t === 'SETTINGS' ? (t as NavTab) : 'TRADE';
+  });
+  const [nvdaState, setNvdaState] = useState<NvdaMonitorState | null>(null);
+  const [nvdaRefreshing, setNvdaRefreshing] = useState<boolean>(false);
+  const [nvdaAudioEnabled, setNvdaAudioEnabled] = useState<boolean>(false);
+  const [flushAlertsEnabled, setFlushAlertsEnabled] = useState<boolean>(false);
+  const nvdaAudioCtxRef = useRef<AudioContext | null>(null);
+  const nvdaLastBannerCodeRef = useRef<string | null>(null);
+  const nvdaAudioEnabledRef = useRef<boolean>(false);
+  nvdaAudioEnabledRef.current = nvdaAudioEnabled;
+  const flushAlertsEnabledRef = useRef<boolean>(false);
+  flushAlertsEnabledRef.current = flushAlertsEnabled;
+  const flushPrevCandStatesRef = useRef<Record<string, string> | null>(null);
+  const flushSeenAlertsRef = useRef<Set<string> | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState<boolean>(
     initialParams.get('diag') === '1'
   );
@@ -106,6 +126,245 @@ export const App: React.FC = () => {
       // ignore transient error
     }
   }, []);
+
+  const ensureNvdaAudioCtx = useCallback(() => {
+    if (!nvdaAudioCtxRef.current) {
+      const AC =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (AC) {
+        nvdaAudioCtxRef.current = new AC();
+      }
+    }
+    if (nvdaAudioCtxRef.current && nvdaAudioCtxRef.current.state === 'suspended') {
+      nvdaAudioCtxRef.current.resume();
+    }
+  }, []);
+
+  const playNvdaAlertChime = useCallback(
+    (kind: 'SIGNAL' | 'DANGER' | 'ARMED') => {
+      ensureNvdaAudioCtx();
+      const ctx = nvdaAudioCtxRef.current;
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const notes =
+        kind === 'SIGNAL'
+          ? [587.33, 783.99, 1046.5, 1318.5]
+          : kind === 'DANGER'
+          ? [330, 246.94]
+          : [523.25, 659.25];
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = kind === 'DANGER' ? 'sawtooth' : 'triangle';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.13);
+        gain.gain.setValueAtTime(0.0001, now + idx * 0.13);
+        gain.gain.exponentialRampToValueAtTime(0.22, now + idx * 0.13 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.13 + 0.24);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + idx * 0.13);
+        osc.stop(now + idx * 0.13 + 0.25);
+      });
+    },
+    [ensureNvdaAudioCtx]
+  );
+
+  const handleToggleNvdaAudio = useCallback(() => {
+    ensureNvdaAudioCtx();
+    setNvdaAudioEnabled((prev) => {
+      const next = !prev;
+      if (next) {
+        playNvdaAlertChime('ARMED');
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      }
+      return next;
+    });
+  }, [ensureNvdaAudioCtx, playNvdaAlertChime]);
+
+  const handleToggleFlushAlerts = useCallback(
+    (explicitNext?: boolean) => {
+      ensureNvdaAudioCtx();
+      const next =
+        typeof explicitNext === 'boolean' ? explicitNext : !flushAlertsEnabledRef.current;
+      setFlushAlertsEnabled(next);
+      if (next) {
+        playNvdaAlertChime('ARMED');
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      }
+      fetch('/api/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-FlushReclaim-Confirm': 'true',
+        },
+        body: JSON.stringify({ sound_alerts_enabled: next }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d?.snapshot) setSnapshot(d.snapshot);
+        })
+        .catch(() => {});
+    },
+    [ensureNvdaAudioCtx, playNvdaAlertChime]
+  );
+
+  // Evaluate Flush & Reclaim candidate transitions & critical alerts for Audio + Desktop Notifications
+  useEffect(() => {
+    if (!snapshot) return;
+
+    // Seed initial baseline on first snapshot without firing startup chimes
+    if (flushPrevCandStatesRef.current === null) {
+      const initMap: Record<string, string> = {};
+      for (const c of snapshot.candidates) {
+        initMap[c.symbol] = c.signal_state;
+      }
+      flushPrevCandStatesRef.current = initMap;
+      flushSeenAlertsRef.current = new Set(
+        snapshot.alerts.map((a) => a.alert_id)
+      );
+      return;
+    }
+
+    const prevMap = flushPrevCandStatesRef.current;
+    const seenAlerts = flushSeenAlertsRef.current || new Set<string>();
+    flushSeenAlertsRef.current = seenAlerts;
+
+    let highestKind: 'SIGNAL' | 'ARMED' | 'DANGER' | null = null;
+    const notifications: Array<{ title: string; body: string }> = [];
+
+    for (const c of snapshot.candidates) {
+      const prev = prevMap[c.symbol];
+      prevMap[c.symbol] = c.signal_state;
+      if (prev && prev !== c.signal_state) {
+        if (c.signal_state === 'READY_FOR_REVIEW') {
+          highestKind = 'SIGNAL';
+          notifications.push({
+            title: `🚨 FLUSH & RECLAIM SIGNAL — ${c.symbol} @ $${c.last_price.toFixed(2)}`,
+            body: `${c.concise_reason} | Session VWAP $${c.session_vwap.toFixed(2)}`,
+          });
+        } else if (
+          c.signal_state === 'WATCHING_ARMED' &&
+          prev !== 'READY_FOR_REVIEW'
+        ) {
+          if (highestKind !== 'SIGNAL') highestKind = 'ARMED';
+          notifications.push({
+            title: `⚡ FLUSH & RECLAIM ARMED — ${c.symbol} ($${c.last_price.toFixed(2)})`,
+            body: c.concise_reason,
+          });
+        }
+      }
+    }
+
+    for (const a of snapshot.alerts) {
+      if (!seenAlerts.has(a.alert_id)) {
+        seenAlerts.add(a.alert_id);
+        const sev = (a.severity || '').toUpperCase();
+        if (
+          !a.acknowledged &&
+          (sev === 'CRITICAL' || sev === 'ERROR' || sev === 'HIGH')
+        ) {
+          if (!highestKind) highestKind = 'DANGER';
+          notifications.push({
+            title: `⚠️ FLUSH & RECLAIM ALERT${a.symbol ? ` (${a.symbol})` : ''}`,
+            body: a.message,
+          });
+        }
+      }
+    }
+
+    if (flushAlertsEnabledRef.current && highestKind) {
+      playNvdaAlertChime(highestKind);
+      if ('Notification' in window && Notification.permission === 'granted') {
+        notifications.forEach((n) => {
+          new Notification(n.title, { body: n.body });
+        });
+      }
+    }
+  }, [snapshot, playNvdaAlertChime]);
+
+  const applyNvdaPayload = useCallback(
+    (data: NvdaMonitorState) => {
+      setNvdaState(data);
+      const banner = data?.banner;
+      if (!banner || !banner.code) return;
+      if (nvdaLastBannerCodeRef.current === null) {
+        nvdaLastBannerCodeRef.current = banner.code;
+        return;
+      }
+      if (banner.code !== nvdaLastBannerCodeRef.current) {
+        nvdaLastBannerCodeRef.current = banner.code;
+        const isSig = banner.severity === 'signal';
+        const isArm = banner.severity === 'armed';
+        const isDanger = banner.severity === 'danger';
+        if (nvdaAudioEnabledRef.current && (isSig || isArm || isDanger)) {
+          playNvdaAlertChime(isSig ? 'SIGNAL' : isDanger ? 'DANGER' : 'ARMED');
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(banner.headline, { body: banner.subtext });
+          }
+        }
+      }
+    },
+    [playNvdaAlertChime]
+  );
+
+  const fetchNvdaState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/nvda/state', { cache: 'no-store' });
+      if (res.ok) {
+        const data: NvdaMonitorState = await res.json();
+        applyNvdaPayload(data);
+      }
+    } catch {
+      // ignore transient poll error
+    }
+  }, [applyNvdaPayload]);
+
+  const handleForceRefreshNvda = useCallback(async () => {
+    setNvdaRefreshing(true);
+    try {
+      const res = await fetch('/api/nvda/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-FlushReclaim-Confirm': 'true',
+        },
+      });
+      if (res.ok) {
+        const data: NvdaMonitorState = await res.json();
+        applyNvdaPayload(data);
+      }
+    } catch {
+      // ignore transient error
+    } finally {
+      setNvdaRefreshing(false);
+    }
+  }, [applyNvdaPayload]);
+
+  const handleSwitchView = useCallback((view: WorkspaceView) => {
+    setActiveView(view);
+    const url = new URL(window.location.href);
+    if (view === 'NVDA') {
+      url.searchParams.set('view', 'nvda');
+    } else {
+      url.searchParams.delete('view');
+    }
+    window.history.replaceState({}, '', url.toString());
+  }, []);
+
+  useEffect(() => {
+    fetchNvdaState();
+    if (initialParams.get('nosse') === '1') {
+      return;
+    }
+    const timer = window.setInterval(fetchNvdaState, 4000);
+    return () => window.clearInterval(timer);
+  }, [fetchNvdaState, initialParams]);
 
   // Connect to SSE stream with automatic snapshot recovery on connect/reconnect
   useEffect(() => {
@@ -512,6 +771,18 @@ export const App: React.FC = () => {
     (p) => p.source_mode === 'MANUAL_USER_REPORTED'
   );
 
+  const nvdaSeverity = nvdaState?.banner?.severity || 'standby';
+  const nvdaShortBadge =
+    nvdaSeverity === 'signal'
+      ? 'SIGNAL'
+      : nvdaSeverity === 'armed'
+      ? 'ARMED'
+      : nvdaSeverity === 'danger'
+      ? 'STOPPED'
+      : nvdaState?.market_phase === 'PREMARKET'
+      ? 'PREMKT'
+      : 'WATCH';
+
   return (
     <div className="app-shell">
       {/* ==================== TOP HEADER BAR ==================== */}
@@ -527,29 +798,67 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          <nav className="primary-nav" aria-label="Primary Navigation">
+          {/* Workspace View Switcher (Flush & Reclaim <-> NVDA Signal Monitor) */}
+          <div
+            className="workspace-switcher"
+            role="tablist"
+            aria-label="Dashboard Workspace Switcher"
+          >
             <button
               type="button"
-              className={`nav-tab ${activeTab === 'TRADE' ? 'active' : ''}`}
-              onClick={() => setActiveTab('TRADE')}
+              role="tab"
+              aria-selected={activeView === 'FLUSH'}
+              className={`ws-toggle-btn ${activeView === 'FLUSH' ? 'active' : ''}`}
+              onClick={() => handleSwitchView('FLUSH')}
             >
-              Trade
+              <span>Flush &amp; Reclaim</span>
             </button>
             <button
               type="button"
-              className={`nav-tab ${activeTab === 'JOURNAL' ? 'active' : ''}`}
-              onClick={() => setActiveTab('JOURNAL')}
+              role="tab"
+              aria-selected={activeView === 'NVDA'}
+              className={`ws-toggle-btn ws-nvda-btn ${
+                activeView === 'NVDA' ? 'active' : ''
+              } sev-${nvdaSeverity}`}
+              onClick={() => handleSwitchView('NVDA')}
             >
-              Journal ({snapshot.events.length})
+              <span>NVDA Monitor</span>
+              {nvdaState?.ok && nvdaState.nvda && (
+                <span className="ws-nvda-live tabular">
+                  ${nvdaState.nvda.last.toFixed(2)}
+                </span>
+              )}
+              <span className={`ws-nvda-pill pill-sev-${nvdaSeverity}`}>
+                {nvdaShortBadge}
+              </span>
             </button>
-            <button
-              type="button"
-              className={`nav-tab ${activeTab === 'SETTINGS' ? 'active' : ''}`}
-              onClick={() => setActiveTab('SETTINGS')}
-            >
-              Settings
-            </button>
-          </nav>
+          </div>
+
+          {activeView === 'FLUSH' && (
+            <nav className="primary-nav" aria-label="Primary Navigation">
+              <button
+                type="button"
+                className={`nav-tab ${activeTab === 'TRADE' ? 'active' : ''}`}
+                onClick={() => setActiveTab('TRADE')}
+              >
+                Trade
+              </button>
+              <button
+                type="button"
+                className={`nav-tab ${activeTab === 'JOURNAL' ? 'active' : ''}`}
+                onClick={() => setActiveTab('JOURNAL')}
+              >
+                Journal ({snapshot.events.length})
+              </button>
+              <button
+                type="button"
+                className={`nav-tab ${activeTab === 'SETTINGS' ? 'active' : ''}`}
+                onClick={() => setActiveTab('SETTINGS')}
+              >
+                Settings
+              </button>
+            </nav>
+          )}
         </div>
 
         <div className="header-status-strip">
@@ -623,6 +932,33 @@ export const App: React.FC = () => {
               ? '⏸ New Entries PAUSED'
               : '🟢 Entries Enabled'}
           </button>
+
+          {activeView === 'FLUSH' && (
+            <>
+              {/* Flush & Reclaim Audio + Desktop Alerts Toggle */}
+              <button
+                type="button"
+                className={`btn-toggle-alerts ${
+                  flushAlertsEnabled ? 'armed' : ''
+                }`}
+                onClick={() => handleToggleFlushAlerts()}
+                title="Enable WebAudio chimes and browser desktop notifications for Flush & Reclaim ARMED and READY_FOR_REVIEW signals"
+              >
+                {flushAlertsEnabled
+                  ? '🔔 Alerts ARMED (Audio + Desktop)'
+                  : '🔔 Enable Audio + Desktop Alerts'}
+              </button>
+
+              <button
+                type="button"
+                className="btn-ghost-xs"
+                onClick={() => playNvdaAlertChime('SIGNAL')}
+                title="Test Flush & Reclaim Signal Chime"
+              >
+                🔊 Test Chime
+              </button>
+            </>
+          )}
 
           {/* Technical Diagnostics Disclosure Button */}
           <button
@@ -743,11 +1079,73 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* ==================== NVDA SIGNAL MONITOR VIEW ==================== */}
+      {activeView === 'NVDA' && (
+        <NvdaDashboardView
+          state={nvdaState}
+          audioEnabled={nvdaAudioEnabled}
+          onToggleAudio={handleToggleNvdaAudio}
+          onTestChime={() => playNvdaAlertChime('SIGNAL')}
+          onRefresh={handleForceRefreshNvda}
+          isRefreshing={nvdaRefreshing}
+        />
+      )}
+
       {/* ==================== MAIN CONTENT AREA ==================== */}
-      {activeTab === 'TRADE' && (
+      {activeView === 'FLUSH' && activeTab === 'TRADE' && (
         <main className="trade-workspace">
           {/* ---------- LEFT COLUMN: CANDIDATE LIST ---------- */}
           <aside className="candidate-sidebar" aria-label="Monitored Universe">
+            {/* Pinned LHS Navigation Item for Special NVDA Playbook */}
+            <div className="lhs-playbook-section">
+              <div className="group-header lhs-playbook-header">
+                <span>Special Playbooks</span>
+                <span className="group-count tabular">1</span>
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`lhs-nvda-nav-item sev-${nvdaSeverity}`}
+                onClick={() => handleSwitchView('NVDA')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    handleSwitchView('NVDA');
+                  }
+                }}
+              >
+                <div className="cand-row-top">
+                  <span className="cand-symbol">NVDA Playbook</span>
+                  <span className="cand-price tabular">
+                    {nvdaState?.ok && nvdaState.nvda
+                      ? `$${nvdaState.nvda.last.toFixed(2)}`
+                      : 'Live'}
+                  </span>
+                </div>
+                <div className="cand-row-mid">
+                  <span className={`ws-nvda-pill pill-sev-${nvdaSeverity}`}>
+                    {nvdaShortBadge}
+                  </span>
+                  {nvdaState?.ok && nvdaState.nvda && (
+                    <span
+                      className="tabular"
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color:
+                          nvdaState.nvda.chg_pct >= 0 ? '#34d399' : '#f87171',
+                      }}
+                    >
+                      {nvdaState.nvda.chg_pct >= 0 ? '+' : ''}
+                      {nvdaState.nvda.chg_pct.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+                <div className="cand-reason">
+                  CRWV &amp; SOXL Tailwind · Open Monitor →
+                </div>
+              </div>
+            </div>
+
             <div className="panel-header">
               <h2>Universe Candidates ({snapshot.candidates.length})</h2>
               <span className="panel-subtitle tabular">
@@ -1621,7 +2019,7 @@ export const App: React.FC = () => {
       )}
 
       {/* ==================== JOURNAL DESTINATION ==================== */}
-      {activeTab === 'JOURNAL' && (
+      {activeView === 'FLUSH' && activeTab === 'JOURNAL' && (
         <main className="secondary-workspace">
           <div className="journal-grid">
             <section className="journal-main-card">
@@ -1812,7 +2210,7 @@ export const App: React.FC = () => {
       )}
 
       {/* ==================== SETTINGS DESTINATION ==================== */}
-      {activeTab === 'SETTINGS' && (
+      {activeView === 'FLUSH' && activeTab === 'SETTINGS' && (
         <main className="secondary-workspace">
           <div className="settings-grid">
             <section className="settings-card">
@@ -1875,14 +2273,12 @@ export const App: React.FC = () => {
                 <label className="chart-toggle">
                   <input
                     type="checkbox"
-                    checked={Boolean(snapshot.settings.sound_alerts_enabled)}
-                    onChange={(e) =>
-                      handleUpdateSettings({
-                        sound_alerts_enabled: e.target.checked,
-                      })
-                    }
+                    checked={flushAlertsEnabled}
+                    onChange={(e) => handleToggleFlushAlerts(e.target.checked)}
                   />
-                  <span>Enable Sound Alerts on New Confirmed Signals (Default: Off)</span>
+                  <span>
+                    Enable Audio &amp; Desktop Alerts on New Flush &amp; Reclaim Signals
+                  </span>
                 </label>
               </div>
             </section>

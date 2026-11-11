@@ -336,3 +336,143 @@ export interface DashboardSnapshot {
   alerts: AlertRecord[];
   settings: Record<string, unknown>;
 }
+
+// ==================== NVDA SIGNAL MONITOR TYPES ====================
+
+export interface NvdaBanner {
+  code: string;
+  severity: 'standby' | 'watching' | 'armed' | 'signal' | 'danger';
+  headline: string;
+  subtext: string;
+}
+
+export interface NvdaPeer {
+  symbol: string;
+  prev_close: number;
+  last: number;
+  chg_pct: number;
+  pm_high: number | null;
+  pm_low: number | null;
+  pm_vwap: number | null;
+  vs_pm_vwap_pct: number | null;
+  rth_high: number | null;
+  rth_low: number | null;
+  rth_vwap: number | null;
+  pm_vol_m: number;
+  rth_vol_m: number;
+  last_bar_ts: string;
+}
+
+export interface NvdaGate {
+  id: string;
+  name: string;
+  state: 'PASS' | 'WARN' | 'STANDBY' | 'ARMED' | 'FAIL' | 'CLOSED';
+  current: string;
+  threshold: string;
+  note: string;
+}
+
+export interface NvdaSignal {
+  setup: 'SETUP_A' | 'SETUP_B';
+  bar_open_ts: string;
+  confirmed_at: string;
+  bar_epoch_ms: number;
+  entry_price: number;
+  flush_low?: number;
+  hurdle_cleared?: number;
+  hard_stop: number;
+  tight_stop: number;
+  target_1: number;
+  target_2: number;
+  soxl_at_signal: number;
+  crwv_at_signal: number;
+  in_primary_window?: boolean;
+}
+
+export interface NvdaChecklistItem {
+  label: string;
+  done: boolean;
+  detail: string;
+}
+
+export interface NvdaSetupPlan {
+  is_confirmed: boolean;
+  entry: number;
+  limit_cap: number;
+  hard_stop: number;
+  tight_stop: number;
+  target_1: number;
+  target_2: number;
+  swing_note: string;
+}
+
+export interface NvdaSetupCard {
+  name: string;
+  window: string;
+  status: string;
+  signal: NvdaSignal | null;
+  checklist: NvdaChecklistItem[];
+  plan: NvdaSetupPlan;
+}
+
+export interface NvdaChartBar {
+  ts: string;
+  epoch_ms: number;
+  session: 'PM' | 'RTH';
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  rth_vwap: number | null;
+  forming: boolean;
+}
+
+export interface NvdaLevels {
+  prev_close: number;
+  hard_stop: number;
+  flush_zone_low: number;
+  flush_zone_high: number;
+  pm_low: number;
+  gap_fill_50: number;
+  s4_open_flush: number;
+  rth_open: number | null;
+  rth_low: number | null;
+  rth_high: number | null;
+  rth_vwap: number | null;
+  pm_vwap: number;
+  setup_b_hurdle: number;
+  pm_high: number;
+  target_180: number;
+}
+
+export interface NvdaEvent {
+  key: string;
+  ts: string;
+  level: 'INFO' | 'ARMED' | 'SIGNAL' | 'DANGER';
+  title: string;
+  detail: string;
+}
+
+export interface NvdaMonitorState {
+  ok: boolean;
+  status?: string;
+  message?: string;
+  last_error?: string;
+  updated_at_et?: string;
+  session_date?: string;
+  prev_session_date?: string;
+  market_phase?: 'PREMARKET' | 'RTH' | 'AFTER_HOURS' | 'HISTORICAL';
+  sec_to_bell?: number;
+  sec_to_next_5m_close?: number;
+  banner?: NvdaBanner;
+  levels?: NvdaLevels;
+  nvda?: NvdaPeer;
+  gates?: NvdaGate[];
+  setup_a?: NvdaSetupCard;
+  setup_b?: NvdaSetupCard;
+  peers?: NvdaPeer[];
+  chart_bars?: NvdaChartBar[];
+  signals?: NvdaSignal[];
+  events?: NvdaEvent[];
+}

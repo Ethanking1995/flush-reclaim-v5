@@ -730,6 +730,24 @@ class TestWebDashboardAcceptance(unittest.TestCase):
             self.assertNotEqual(cands_by_sym[sym]["primary_status_badge"], "Data Unavailable")
             self.assertIn(sym, snap_live["order_plans_by_symbol"])
 
+    # --------------------------------------------------------------------------
+    # 18. Integrated NVDA Signal Monitor API & Method Guard
+    # --------------------------------------------------------------------------
+    def test_18_nvda_signal_monitor_endpoints(self) -> None:
+        r_get_guard = self.client.get("/api/nvda/refresh")
+        self.assertEqual(r_get_guard.status_code, 405)
+
+        r_state = self.client.get("/api/nvda/state")
+        self.assertEqual(r_state.status_code, 200)
+        payload = r_state.json()
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload["nvda"]["symbol"], "NVDA")
+        self.assertIn("setup_a", payload)
+        self.assertIn("setup_b", payload)
+        self.assertEqual(len(payload["gates"]), 4)
+        self.assertGreaterEqual(len(payload["peers"]), 9)
+        self.assertGreater(len(payload["chart_bars"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

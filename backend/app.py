@@ -37,6 +37,7 @@ from backend.models import (
     ManualTradeCreateRequest,
     ReconcileTriggerRequest,
 )
+from backend.nvda_monitor import NvdaSignalMonitorService
 from backend.worker import ScannerManagementWorker
 
 
@@ -90,23 +91,27 @@ def create_app(
 ) -> FastAPI:
     db = DashboardDatabase(db_path) if db_path else DashboardDatabase()
     worker = ScannerManagementWorker(db=db)
+    nvda_monitor = NvdaSignalMonitorService(poll_interval_sec=5.0)
 
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI):
         if start_background_worker:
             worker.start_background_loop(interval_seconds=15.0)
+            nvda_monitor.start()
         try:
             yield
         finally:
+            nvda_monitor.stop()
             worker.stop_background_loop()
 
     app = FastAPI(
         title="Flush & Reclaim V5 — Trader Execution Dashboard",
-        version="5.1.0",
+        version="5.2.0",
         lifespan=lifespan,
     )
     app.state.db = db
     app.state.worker = worker
+    app.state.nvda_monitor = nvda_monitor
 
     app.add_middleware(
         CORSMiddleware,
@@ -147,6 +152,21 @@ def create_app(
     @app.get("/api/chart/{symbol}")
     def get_chart(symbol: str) -> Dict[str, Any]:
         return worker.get_symbol_chart(symbol)
+
+    @app.get("/api/nvda/state")
+    def get_nvda_state() -> JSONResponse:
+        return JSONResponse(
+            nvda_monitor.get_state(lazy_prime=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/nvda/refresh")
+    def refresh_nvda_state(request: Request) -> JSONResponse:
+        verify_local_mutation_request(request)
+        return JSONResponse(
+            nvda_monitor.poll_now(),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/stream")
     async def stream_events(request: Request) -> StreamingResponse:
@@ -405,6 +425,7 @@ def create_app(
             "api/settings",
             "api/handoff/open",
             "api/positions/manual",
+            "api/nvda/refresh",
         }
         norm_path = full_path.strip("/")
         if norm_path in post_only_routes or (
