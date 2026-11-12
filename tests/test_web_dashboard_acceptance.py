@@ -731,22 +731,110 @@ class TestWebDashboardAcceptance(unittest.TestCase):
             self.assertIn(sym, snap_live["order_plans_by_symbol"])
 
     # --------------------------------------------------------------------------
-    # 18. Integrated NVDA Signal Monitor API & Method Guard
+    # 18. NVDA Monitor Removed (404 on Legacy /api/nvda/* Endpoints)
     # --------------------------------------------------------------------------
-    def test_18_nvda_signal_monitor_endpoints(self) -> None:
-        r_get_guard = self.client.get("/api/nvda/refresh")
-        self.assertEqual(r_get_guard.status_code, 405)
-
+    def test_18_nvda_monitor_removed(self) -> None:
         r_state = self.client.get("/api/nvda/state")
-        self.assertEqual(r_state.status_code, 200)
-        payload = r_state.json()
-        self.assertTrue(payload.get("ok"))
-        self.assertEqual(payload["nvda"]["symbol"], "NVDA")
-        self.assertIn("setup_a", payload)
-        self.assertIn("setup_b", payload)
-        self.assertEqual(len(payload["gates"]), 4)
-        self.assertGreaterEqual(len(payload["peers"]), 9)
-        self.assertGreater(len(payload["chart_bars"]), 0)
+        self.assertEqual(r_state.status_code, 404)
+        r_refresh_get = self.client.get("/api/nvda/refresh")
+        self.assertEqual(r_refresh_get.status_code, 404)
+        r_refresh_post = self.client.post("/api/nvda/refresh", headers=self.headers)
+        self.assertIn(r_refresh_post.status_code, (404, 405))
+
+    # --------------------------------------------------------------------------
+    # 19. IRA 5WJ26897 Long-Only Market Monitor (Zero Shorting) & Audit
+    # --------------------------------------------------------------------------
+    def test_19_ira_long_only_market_monitor_and_audit(self) -> None:
+        from unittest.mock import patch
+
+        # Method & CSRF guards on /api/whole-market/refresh
+        self.assertEqual(self.client.get("/api/whole-market/refresh").status_code, 405)
+        self.assertEqual(
+            self.client.post(
+                "/api/whole-market/refresh",
+                json={"book_capital_usd": 1000000},
+                headers={"Origin": "https://malicious-site.example.com"},
+            ).status_code,
+            403,
+        )
+
+        # Audit endpoint returns strictly IRA Long-Only strategies (S3, S2, S5 — zero shorting)
+        r_audit = self.client.get("/api/whole-market/audit")
+        self.assertEqual(r_audit.status_code, 200)
+        aud = r_audit.json()
+        self.assertEqual([s["id"] for s in aud["strategies"]], ["S3", "S2", "S5"])
+        for s in aud["strategies"]:
+            self.assertNotIn("SHORT", s["direction"].upper())
+        self.assertIn("sledgehammer", aud)
+        surv_by_id = {row["id"]: row for row in aud["sledgehammer"]["survival_table"]}
+        self.assertNotIn("S1", surv_by_id)
+        self.assertEqual(surv_by_id["S4"]["verdict"], "REJECTED_0935_DECAY")
+        self.assertEqual(surv_by_id["S3"]["verdict"], "IRA_CORE_50PCT")
+        self.assertIn("ira_index_s3_oos", aud["sledgehammer"]["portfolios"])
+
+        # Deterministic offline test of $1,000,000 IRA 5WJ26897 SH_INVERSE_ETF vs UNHEDGED_LONG
+        with patch("backend.whole_market_scanner.CNBC_QUOTE_URL", "http://127.0.0.1:9/offline"):
+            r_sh = self.client.post(
+                "/api/whole-market/refresh",
+                json={
+                    "book_capital_usd": 1000000,
+                    "hedge_mode": "SH_INVERSE_ETF",
+                    "etp_mode": "INDEX_SECTOR_ONLY",
+                },
+                headers=self.headers,
+            )
+            self.assertEqual(r_sh.status_code, 200)
+            sh_scan = r_sh.json()
+            self.assertTrue(sh_scan["ok"])
+            self.assertEqual(sh_scan["hedge_mode"], "SH_INVERSE_ETF")
+            self.assertEqual(sh_scan["etp_mode"], "INDEX_SECTOR_ONLY")
+            cap_sum = sh_scan["capital_summary"]
+            self.assertEqual(cap_sum["max_single_position_usd"], 50000.0)
+            self.assertLessEqual(cap_sum["total_cash_deployed_usd"], 1000000.0 + 1e-6)
+            self.assertAlmostEqual(
+                cap_sum["deployed_primary_usd"] + cap_sum["deployed_hedge_usd"],
+                cap_sum["total_cash_deployed_usd"],
+                places=1,
+            )
+
+            sleeves_by_id = {s["id"]: s for s in sh_scan["sleeves"]}
+            self.assertEqual(set(sleeves_by_id.keys()), {"S3", "S2", "S5"})
+            self.assertEqual(sleeves_by_id["S3"]["weight"], 0.50)
+            self.assertEqual(sleeves_by_id["S2"]["weight"], 0.25)
+            self.assertEqual(sleeves_by_id["S5"]["weight"], 0.25)
+            for sl in sh_scan["sleeves"]:
+                self.assertEqual(sl["direction"], "LONG")
+
+            all_cands_sh = sh_scan["candidates"] + sh_scan["near_candidates"]
+            self.assertGreater(len(all_cands_sh), 0)
+            for c in all_cands_sh:
+                self.assertIn(c["sleeve_id"], ("S3", "S2", "S5"))
+                self.assertEqual(c["direction"], "LONG")
+                self.assertIn(c["hedge_side"], ("BUY", "NONE"))
+                # Strict <=5% ($50k) single-stock cap AND <=0.5% ADTV cap
+                self.assertLessEqual(c["notional_usd"], 50000.0 + 1e-6)
+                self.assertLessEqual(c["notional_usd"], 0.005 * c["adtv20_usd"] + 1e-6)
+                if c["sleeve_id"] == "S3":
+                    self.assertEqual(c["etp_sub_bucket"], "EQUITY_INDEX_SECTOR_BULL")
+                    self.assertEqual(c["hedge_side"], "NONE")
+                    self.assertEqual(c["sh_hedge_shares"], 0)
+                if c["sleeve_id"] in ("S2", "S5") and c["shares"] > 0:
+                    self.assertEqual(c["hedge_side"], "BUY")
+                    self.assertEqual(c["hedge_symbol"], "SH")
+                    self.assertGreater(c["sh_hedge_shares"], 0)
+
+            # Verify UNHEDGED_LONG mode produces 100% single-leg BUY tickets with 0 hedge shares
+            r_unhedged = self.client.get(
+                "/api/whole-market/scan?capital=1000000&hedge_mode=UNHEDGED_LONG&etp_mode=EQUITY_BULL_ER_GUARDED"
+            )
+            self.assertEqual(r_unhedged.status_code, 200)
+            u_scan = r_unhedged.json()
+            self.assertEqual(u_scan["hedge_mode"], "UNHEDGED_LONG")
+            self.assertEqual(u_scan["capital_summary"]["deployed_hedge_usd"], 0.0)
+            for c in u_scan["candidates"] + u_scan["near_candidates"]:
+                self.assertEqual(c["direction"], "LONG")
+                self.assertEqual(c["hedge_side"], "NONE")
+                self.assertEqual(c["sh_hedge_shares"], 0)
 
 
 if __name__ == "__main__":

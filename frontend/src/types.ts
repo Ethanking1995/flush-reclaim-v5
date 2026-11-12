@@ -337,147 +337,10 @@ export interface DashboardSnapshot {
   settings: Record<string, unknown>;
 }
 
-// ==================== NVDA SIGNAL MONITOR TYPES ====================
+// ==================== IRA LONG-ONLY MARKET MONITOR & AUDIT TYPES ====================
 
-export interface NvdaBanner {
-  code: string;
-  severity: 'standby' | 'watching' | 'armed' | 'signal' | 'danger';
-  headline: string;
-  subtext: string;
-}
-
-export interface NvdaPeer {
-  symbol: string;
-  prev_close: number;
-  last: number;
-  chg_pct: number;
-  pm_high: number | null;
-  pm_low: number | null;
-  pm_vwap: number | null;
-  vs_pm_vwap_pct: number | null;
-  rth_high: number | null;
-  rth_low: number | null;
-  rth_vwap: number | null;
-  pm_vol_m: number;
-  rth_vol_m: number;
-  last_bar_ts: string;
-}
-
-export interface NvdaGate {
-  id: string;
-  name: string;
-  state: 'PASS' | 'WARN' | 'STANDBY' | 'ARMED' | 'FAIL' | 'CLOSED';
-  current: string;
-  threshold: string;
-  note: string;
-}
-
-export interface NvdaSignal {
-  setup: 'SETUP_A' | 'SETUP_B';
-  bar_open_ts: string;
-  confirmed_at: string;
-  bar_epoch_ms: number;
-  entry_price: number;
-  flush_low?: number;
-  hurdle_cleared?: number;
-  hard_stop: number;
-  tight_stop: number;
-  target_1: number;
-  target_2: number;
-  soxl_at_signal: number;
-  crwv_at_signal: number;
-  in_primary_window?: boolean;
-}
-
-export interface NvdaChecklistItem {
-  label: string;
-  done: boolean;
-  detail: string;
-}
-
-export interface NvdaSetupPlan {
-  is_confirmed: boolean;
-  entry: number;
-  limit_cap: number;
-  hard_stop: number;
-  tight_stop: number;
-  target_1: number;
-  target_2: number;
-  swing_note: string;
-}
-
-export interface NvdaSetupCard {
-  name: string;
-  window: string;
-  status: string;
-  signal: NvdaSignal | null;
-  checklist: NvdaChecklistItem[];
-  plan: NvdaSetupPlan;
-}
-
-export interface NvdaChartBar {
-  ts: string;
-  epoch_ms: number;
-  session: 'PM' | 'RTH';
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-  rth_vwap: number | null;
-  forming: boolean;
-}
-
-export interface NvdaLevels {
-  prev_close: number;
-  hard_stop: number;
-  flush_zone_low: number;
-  flush_zone_high: number;
-  pm_low: number;
-  gap_fill_50: number;
-  s4_open_flush: number;
-  rth_open: number | null;
-  rth_low: number | null;
-  rth_high: number | null;
-  rth_vwap: number | null;
-  pm_vwap: number;
-  setup_b_hurdle: number;
-  pm_high: number;
-  target_180: number;
-}
-
-export interface NvdaEvent {
-  key: string;
-  ts: string;
-  level: 'INFO' | 'ARMED' | 'SIGNAL' | 'DANGER';
-  title: string;
-  detail: string;
-}
-
-export interface NvdaMonitorState {
-  ok: boolean;
-  status?: string;
-  message?: string;
-  last_error?: string;
-  updated_at_et?: string;
-  session_date?: string;
-  prev_session_date?: string;
-  market_phase?: 'PREMARKET' | 'RTH' | 'AFTER_HOURS' | 'HISTORICAL';
-  sec_to_bell?: number;
-  sec_to_next_5m_close?: number;
-  banner?: NvdaBanner;
-  levels?: NvdaLevels;
-  nvda?: NvdaPeer;
-  gates?: NvdaGate[];
-  setup_a?: NvdaSetupCard;
-  setup_b?: NvdaSetupCard;
-  peers?: NvdaPeer[];
-  chart_bars?: NvdaChartBar[];
-  signals?: NvdaSignal[];
-  events?: NvdaEvent[];
-}
-
-// ==================== WHOLE MARKET MULTI-STRATEGY SCANNER & AUDIT TYPES ====================
+export type WholeMarketHedgeMode = 'SH_INVERSE_ETF' | 'UNHEDGED_LONG';
+export type WholeMarketEtpMode = 'EQUITY_BULL_ER_GUARDED' | 'INDEX_SECTOR_ONLY';
 
 export interface WholeMarketGate {
   name: string;
@@ -486,17 +349,28 @@ export interface WholeMarketGate {
   required: string;
 }
 
+export interface WholeMarketNewsGuard {
+  checked: boolean;
+  status: string;
+  afternoon_1500_1600_count: number;
+  toxic_today_count: number;
+  items_scanned: number;
+  latest_headline: string | null;
+  latest_time_et: string | null;
+  source?: string;
+}
+
 export interface WholeMarketCandidate {
   id: string;
-  sleeve_id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  sleeve_id: 'S3' | 'S2' | 'S5';
   sleeve_short_name: string;
-  direction: 'LONG' | 'SHORT';
+  direction: 'LONG';
   status:
     | 'SIGNAL_ACTIVE'
-    | 'MORNING_COHORT_LIVE'
     | 'FORMING_IN_WINDOW'
     | 'PRE_3PM_WATCH'
-    | 'NEAR_TRIGGER_WATCH';
+    | 'NEAR_TRIGGER_WATCH'
+    | 'BLOCKED_GUARD';
   sort_score: number;
   cohort_rank: number;
   in_top_cohort: boolean;
@@ -504,6 +378,9 @@ export interface WholeMarketCandidate {
   name: string;
   guild: string;
   sector: string;
+  etp_sub_bucket?: string | null;
+  underlying_symbol?: string | null;
+  next_er_date?: string | null;
   industry: string;
   adtv20_usd: number;
   prev_close: number;
@@ -524,13 +401,15 @@ export interface WholeMarketCandidate {
   stop_price: number;
   shares: number;
   notional_usd: number;
-  hedge_side: 'BUY' | 'SHORT' | 'NONE';
-  spy_hedge_shares: number;
+  hedge_side: 'BUY' | 'NONE';
+  hedge_symbol: string;
+  hedge_price: number;
+  hedge_notional_usd: number;
+  sh_hedge_shares: number;
   rt_cost_bps: number;
-  live_mtm_bps: number | null;
-  live_mtm_usd: number | null;
-  catalyst_warning?: boolean;
-  stopped_out?: boolean;
+  guard_blocked?: boolean;
+  guard_reason?: string | null;
+  news_guard?: WholeMarketNewsGuard | null;
   entry_bell: string;
   exit_bell: string;
   gates: WholeMarketGate[];
@@ -538,12 +417,13 @@ export interface WholeMarketCandidate {
 }
 
 export interface WholeMarketSleeveSummary {
-  id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  id: 'S3' | 'S2' | 'S5';
   name: string;
   short_name: string;
   weight: number;
   max_positions: number;
-  direction: 'LONG' | 'SHORT';
+  direction: 'LONG';
+  uses_sh_hedge: boolean;
   hedge_mode: string;
   entry_bell: string;
   exit_bell: string;
@@ -552,10 +432,11 @@ export interface WholeMarketSleeveSummary {
   audited_t: number;
   audited_net_bps: number;
   sleeve_capital_usd: number;
+  deployed_usd?: number;
   qualifying_count: number;
+  blocked_count?: number;
   cohort_selected_count: number;
   near_count: number;
-  today_cohort_mtm_bps: number | null;
 }
 
 export interface WholeMarketScanPayload {
@@ -568,6 +449,17 @@ export interface WholeMarketScanPayload {
   live_scanner_universe_count: number;
   quotes_received: number;
   book_capital_usd: number;
+  hedge_mode: WholeMarketHedgeMode;
+  etp_mode: WholeMarketEtpMode;
+  capital_summary: {
+    book_capital_usd: number;
+    max_single_position_usd: number;
+    deployed_primary_usd: number;
+    deployed_hedge_usd: number;
+    total_cash_deployed_usd: number;
+    undeployed_cash_usd: number;
+    deployed_pct: number;
+  };
   market_window: {
     phase: string;
     badge: string;
@@ -582,6 +474,7 @@ export interface WholeMarketScanPayload {
     high: number;
     low: number;
     last: number;
+    sh_last?: number;
     p1500: number | null;
     day_chg_pct: number;
     intraday_chg_pct: number;
@@ -590,10 +483,11 @@ export interface WholeMarketScanPayload {
   candidates: WholeMarketCandidate[];
   near_candidates: WholeMarketCandidate[];
   total_active_or_forming: number;
+  total_guard_blocked: number;
 }
 
 export interface WholeMarketAuditStrategy {
-  id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+  id: 'S3' | 'S2' | 'S5';
   name: string;
   short_name: string;
   weight_pct: number;
@@ -628,12 +522,40 @@ export interface WholeMarketAuditStrategy {
   }>;
 }
 
+export interface WholeMarketSledgehammerPortfolioStat {
+  days: number;
+  return_pct: number;
+  max_dd_pct: number;
+  win_months_pct: number;
+  sharpe: number;
+  daily_t: number;
+  skew: number;
+  kurt: number;
+  sr0_ann_meff: number;
+  dsr_meff: number;
+  pval_meff: number;
+  sr0_ann_10k: number;
+  dsr_10k: number;
+  pval_10k: number;
+  avg_deployed_pct?: number;
+}
+
+export interface WholeMarketSledgehammerSubUniverse {
+  n: number;
+  gross: number;
+  net: number;
+  wr: number;
+  t: number;
+  worst: number;
+}
+
 export interface WholeMarketAuditSummary {
   generated_at: string;
   overview: {
     total_specs_tested: number;
     surviving_specs: number;
     rejected_specs: number;
+    retired_sledgehammer_specs?: number;
     daily_universe_tickers: number;
     daily_stock_days: number;
     intraday_5m_60d_tickers: number;
@@ -665,6 +587,8 @@ export interface WholeMarketAuditSummary {
   equity_curve: Array<{
     date: string;
     port: number;
+    margin_strict?: number;
+    ira_strict?: number;
     s1: number;
     s2: number;
     s3: number;
@@ -696,4 +620,45 @@ export interface WholeMarketAuditSummary {
     oos_t: number;
     why_failed: string;
   }>;
+  sledgehammer?: {
+    trial_stats: {
+      n_raw_trials: number;
+      m_eff_trials: number;
+      empirical_daily_sr_var: number;
+      sr0_hurdle_ann_meff: number;
+      sr0_hurdle_ann_10k: number;
+    };
+    survival_table: Array<{
+      id: 'S1' | 'S2' | 'S3' | 'S4' | 'S5';
+      name: string;
+      before_net_bps: number;
+      before_t: number;
+      after_0931_net_bps: number;
+      after_net_bps: number;
+      after_t: number;
+      decay_pct: number;
+      verdict: string;
+      cause: string;
+    }>;
+    s3_sub_universes: {
+      index_sector_bull: WholeMarketSledgehammerSubUniverse;
+      single_stock_bull_no_er: WholeMarketSledgehammerSubUniverse;
+      all_us_equity_bull_no_er: WholeMarketSledgehammerSubUniverse;
+      commodity_rates_vix_rejected: WholeMarketSledgehammerSubUniverse;
+      exit_0930_gross_bps: number;
+      exit_0935_gross_bps: number;
+    };
+    portfolios: {
+      margin_strict5_1y: WholeMarketSledgehammerPortfolioStat;
+      margin_strict5_oos: WholeMarketSledgehammerPortfolioStat;
+      ira_index_s3_1y: WholeMarketSledgehammerPortfolioStat;
+      ira_index_s3_oos: WholeMarketSledgehammerPortfolioStat;
+      ira_eqbull_s3_1y: WholeMarketSledgehammerPortfolioStat;
+      ira_eqbull_s3_oos: WholeMarketSledgehammerPortfolioStat;
+      cio_active_1y: WholeMarketSledgehammerPortfolioStat;
+      cio_active_oos: WholeMarketSledgehammerPortfolioStat;
+      sleeve_dsr: Record<string, WholeMarketSledgehammerPortfolioStat>;
+    };
+    corr_3x3: Record<string, Record<string, number>>;
+  };
 }

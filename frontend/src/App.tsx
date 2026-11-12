@@ -4,18 +4,18 @@ import {
   CandidateCategory,
   CandidateRow,
   DashboardSnapshot,
-  NvdaMonitorState,
   OrderPlan,
   PositionRecord,
   SymbolChartPayload,
   WholeMarketAuditSummary,
+  WholeMarketEtpMode,
+  WholeMarketHedgeMode,
   WholeMarketScanPayload,
 } from './types';
 import { SymbolChart } from './components/SymbolChart';
-import { NvdaDashboardView } from './components/NvdaDashboardView';
 import { WholeMarketAuditView } from './components/WholeMarketAuditView';
 
-type WorkspaceView = 'NVDA' | 'FLUSH' | 'AUDIT';
+type WorkspaceView = 'FLUSH' | 'MARKET';
 type NavTab = 'TRADE' | 'JOURNAL' | 'SETTINGS';
 
 const CATEGORY_LABELS: Record<CandidateCategory, string> = {
@@ -44,27 +44,24 @@ export const App: React.FC = () => {
   const [chartData, setChartData] = useState<SymbolChartPayload | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>(() => {
     const v = (initialParams.get('view') || initialParams.get('tab') || '').toUpperCase();
-    if (v === 'NVDA') return 'NVDA';
-    if (v === 'AUDIT' || v === 'WHOLE' || v === 'SCANNER') return 'AUDIT';
+    if (v === 'MARKET' || v === 'AUDIT' || v === 'WHOLE' || v === 'SCANNER') {
+      return 'MARKET';
+    }
     return 'FLUSH';
   });
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     const t = (initialParams.get('tab') || 'TRADE').toUpperCase();
     return t === 'JOURNAL' || t === 'SETTINGS' ? (t as NavTab) : 'TRADE';
   });
-  const [nvdaState, setNvdaState] = useState<NvdaMonitorState | null>(null);
-  const [nvdaRefreshing, setNvdaRefreshing] = useState<boolean>(false);
   const [wmScan, setWmScan] = useState<WholeMarketScanPayload | null>(null);
   const [wmAudit, setWmAudit] = useState<WholeMarketAuditSummary | null>(null);
-  const [wmBookCapital, setWmBookCapital] = useState<number>(100000);
+  const [wmBookCapital, setWmBookCapital] = useState<number>(1000000);
+  const [wmHedgeMode, setWmHedgeMode] = useState<WholeMarketHedgeMode>('SH_INVERSE_ETF');
+  const [wmEtpMode, setWmEtpMode] = useState<WholeMarketEtpMode>('EQUITY_BULL_ER_GUARDED');
   const [wmRefreshing, setWmRefreshing] = useState<boolean>(false);
   const [wmAutoPoll, setWmAutoPoll] = useState<boolean>(true);
-  const [nvdaAudioEnabled, setNvdaAudioEnabled] = useState<boolean>(false);
   const [flushAlertsEnabled, setFlushAlertsEnabled] = useState<boolean>(false);
-  const nvdaAudioCtxRef = useRef<AudioContext | null>(null);
-  const nvdaLastBannerCodeRef = useRef<string | null>(null);
-  const nvdaAudioEnabledRef = useRef<boolean>(false);
-  nvdaAudioEnabledRef.current = nvdaAudioEnabled;
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const flushAlertsEnabledRef = useRef<boolean>(false);
   flushAlertsEnabledRef.current = flushAlertsEnabled;
   const flushPrevCandStatesRef = useRef<Record<string, string> | null>(null);
@@ -137,25 +134,25 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const ensureNvdaAudioCtx = useCallback(() => {
-    if (!nvdaAudioCtxRef.current) {
+  const ensureAudioCtx = useCallback(() => {
+    if (!audioCtxRef.current) {
       const AC =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext })
           .webkitAudioContext;
       if (AC) {
-        nvdaAudioCtxRef.current = new AC();
+        audioCtxRef.current = new AC();
       }
     }
-    if (nvdaAudioCtxRef.current && nvdaAudioCtxRef.current.state === 'suspended') {
-      nvdaAudioCtxRef.current.resume();
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
     }
   }, []);
 
-  const playNvdaAlertChime = useCallback(
+  const playAlertChime = useCallback(
     (kind: 'SIGNAL' | 'DANGER' | 'ARMED') => {
-      ensureNvdaAudioCtx();
-      const ctx = nvdaAudioCtxRef.current;
+      ensureAudioCtx();
+      const ctx = audioCtxRef.current;
       if (!ctx) return;
       const now = ctx.currentTime;
       const notes =
@@ -178,31 +175,17 @@ export const App: React.FC = () => {
         osc.stop(now + idx * 0.13 + 0.25);
       });
     },
-    [ensureNvdaAudioCtx]
+    [ensureAudioCtx]
   );
-
-  const handleToggleNvdaAudio = useCallback(() => {
-    ensureNvdaAudioCtx();
-    setNvdaAudioEnabled((prev) => {
-      const next = !prev;
-      if (next) {
-        playNvdaAlertChime('ARMED');
-        if ('Notification' in window && Notification.permission === 'default') {
-          Notification.requestPermission();
-        }
-      }
-      return next;
-    });
-  }, [ensureNvdaAudioCtx, playNvdaAlertChime]);
 
   const handleToggleFlushAlerts = useCallback(
     (explicitNext?: boolean) => {
-      ensureNvdaAudioCtx();
+      ensureAudioCtx();
       const next =
         typeof explicitNext === 'boolean' ? explicitNext : !flushAlertsEnabledRef.current;
       setFlushAlertsEnabled(next);
       if (next) {
-        playNvdaAlertChime('ARMED');
+        playAlertChime('ARMED');
         if ('Notification' in window && Notification.permission === 'default') {
           Notification.requestPermission();
         }
@@ -221,7 +204,7 @@ export const App: React.FC = () => {
         })
         .catch(() => {});
     },
-    [ensureNvdaAudioCtx, playNvdaAlertChime]
+    [ensureAudioCtx, playAlertChime]
   );
 
   // Evaluate Flush & Reclaim candidate transitions & critical alerts for Audio + Desktop Notifications
@@ -289,87 +272,40 @@ export const App: React.FC = () => {
     }
 
     if (flushAlertsEnabledRef.current && highestKind) {
-      playNvdaAlertChime(highestKind);
+      playAlertChime(highestKind);
       if ('Notification' in window && Notification.permission === 'granted') {
         notifications.forEach((n) => {
           new Notification(n.title, { body: n.body });
         });
       }
     }
-  }, [snapshot, playNvdaAlertChime]);
+  }, [snapshot, playAlertChime]);
 
-  const applyNvdaPayload = useCallback(
-    (data: NvdaMonitorState) => {
-      setNvdaState(data);
-      const banner = data?.banner;
-      if (!banner || !banner.code) return;
-      if (nvdaLastBannerCodeRef.current === null) {
-        nvdaLastBannerCodeRef.current = banner.code;
-        return;
-      }
-      if (banner.code !== nvdaLastBannerCodeRef.current) {
-        nvdaLastBannerCodeRef.current = banner.code;
-        const isSig = banner.severity === 'signal';
-        const isArm = banner.severity === 'armed';
-        const isDanger = banner.severity === 'danger';
-        if (nvdaAudioEnabledRef.current && (isSig || isArm || isDanger)) {
-          playNvdaAlertChime(isSig ? 'SIGNAL' : isDanger ? 'DANGER' : 'ARMED');
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification(banner.headline, { body: banner.subtext });
-          }
+  const fetchWholeMarketScan = useCallback(
+    async (
+      capital: number,
+      hedgeMode: WholeMarketHedgeMode,
+      etpMode: WholeMarketEtpMode
+    ) => {
+      try {
+        const qs = new URLSearchParams({
+          capital: String(capital),
+          hedge_mode: hedgeMode,
+          etp_mode: etpMode,
+        });
+        const res = await fetch(`/api/whole-market/scan?${qs.toString()}`, {
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const data: WholeMarketScanPayload = await res.json();
+          setWmScan(data);
         }
+      } catch {
+        // ignore transient poll error
       }
     },
-    [playNvdaAlertChime]
+    []
   );
-
-  const fetchNvdaState = useCallback(async () => {
-    try {
-      const res = await fetch('/api/nvda/state', { cache: 'no-store' });
-      if (res.ok) {
-        const data: NvdaMonitorState = await res.json();
-        applyNvdaPayload(data);
-      }
-    } catch {
-      // ignore transient poll error
-    }
-  }, [applyNvdaPayload]);
-
-  const handleForceRefreshNvda = useCallback(async () => {
-    setNvdaRefreshing(true);
-    try {
-      const res = await fetch('/api/nvda/refresh', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-FlushReclaim-Confirm': 'true',
-        },
-      });
-      if (res.ok) {
-        const data: NvdaMonitorState = await res.json();
-        applyNvdaPayload(data);
-      }
-    } catch {
-      // ignore transient error
-    } finally {
-      setNvdaRefreshing(false);
-    }
-  }, [applyNvdaPayload]);
-
-  const fetchWholeMarketScan = useCallback(async (capital: number) => {
-    try {
-      const res = await fetch(
-        `/api/whole-market/scan?capital=${encodeURIComponent(String(capital))}`,
-        { cache: 'no-store' }
-      );
-      if (res.ok) {
-        const data: WholeMarketScanPayload = await res.json();
-        setWmScan(data);
-      }
-    } catch {
-      // ignore transient poll error
-    }
-  }, []);
 
   const fetchWholeMarketAudit = useCallback(async () => {
     try {
@@ -392,7 +328,11 @@ export const App: React.FC = () => {
           'Content-Type': 'application/json',
           'X-FlushReclaim-Confirm': 'true',
         },
-        body: JSON.stringify({ book_capital_usd: wmBookCapital }),
+        body: JSON.stringify({
+          book_capital_usd: wmBookCapital,
+          hedge_mode: wmHedgeMode,
+          etp_mode: wmEtpMode,
+        }),
       });
       if (res.ok) {
         const data: WholeMarketScanPayload = await res.json();
@@ -403,23 +343,37 @@ export const App: React.FC = () => {
     } finally {
       setWmRefreshing(false);
     }
-  }, [wmBookCapital]);
+  }, [wmBookCapital, wmHedgeMode, wmEtpMode]);
 
   const handleChangeBookCapital = useCallback(
     (nextCap: number) => {
       setWmBookCapital(nextCap);
-      fetchWholeMarketScan(nextCap);
+      fetchWholeMarketScan(nextCap, wmHedgeMode, wmEtpMode);
     },
-    [fetchWholeMarketScan]
+    [fetchWholeMarketScan, wmHedgeMode, wmEtpMode]
+  );
+
+  const handleChangeHedgeMode = useCallback(
+    (nextHedge: WholeMarketHedgeMode) => {
+      setWmHedgeMode(nextHedge);
+      fetchWholeMarketScan(wmBookCapital, nextHedge, wmEtpMode);
+    },
+    [fetchWholeMarketScan, wmBookCapital, wmEtpMode]
+  );
+
+  const handleChangeEtpMode = useCallback(
+    (nextEtp: WholeMarketEtpMode) => {
+      setWmEtpMode(nextEtp);
+      fetchWholeMarketScan(wmBookCapital, wmHedgeMode, nextEtp);
+    },
+    [fetchWholeMarketScan, wmBookCapital, wmHedgeMode]
   );
 
   const handleSwitchView = useCallback((view: WorkspaceView) => {
     setActiveView(view);
     const url = new URL(window.location.href);
-    if (view === 'NVDA') {
-      url.searchParams.set('view', 'nvda');
-    } else if (view === 'AUDIT') {
-      url.searchParams.set('view', 'audit');
+    if (view === 'MARKET') {
+      url.searchParams.set('view', 'market');
     } else {
       url.searchParams.delete('view');
     }
@@ -431,24 +385,22 @@ export const App: React.FC = () => {
   }, [fetchWholeMarketAudit]);
 
   useEffect(() => {
-    fetchWholeMarketScan(wmBookCapital);
+    fetchWholeMarketScan(wmBookCapital, wmHedgeMode, wmEtpMode);
     if (initialParams.get('nosse') === '1' || !wmAutoPoll) {
       return;
     }
     const timer = window.setInterval(() => {
-      fetchWholeMarketScan(wmBookCapital);
+      fetchWholeMarketScan(wmBookCapital, wmHedgeMode, wmEtpMode);
     }, 20000);
     return () => window.clearInterval(timer);
-  }, [fetchWholeMarketScan, wmBookCapital, wmAutoPoll, initialParams]);
-
-  useEffect(() => {
-    fetchNvdaState();
-    if (initialParams.get('nosse') === '1') {
-      return;
-    }
-    const timer = window.setInterval(fetchNvdaState, 4000);
-    return () => window.clearInterval(timer);
-  }, [fetchNvdaState, initialParams]);
+  }, [
+    fetchWholeMarketScan,
+    wmBookCapital,
+    wmHedgeMode,
+    wmEtpMode,
+    wmAutoPoll,
+    initialParams,
+  ]);
 
   // Connect to SSE stream with automatic snapshot recovery on connect/reconnect
   useEffect(() => {
@@ -855,56 +807,26 @@ export const App: React.FC = () => {
     (p) => p.source_mode === 'MANUAL_USER_REPORTED'
   );
 
-  const nvdaSeverity = nvdaState?.banner?.severity || 'standby';
-  const nvdaShortBadge =
-    nvdaSeverity === 'signal'
-      ? 'SIGNAL'
-      : nvdaSeverity === 'armed'
-      ? 'ARMED'
-      : nvdaSeverity === 'danger'
-      ? 'STOPPED'
-      : nvdaState?.market_phase === 'PREMARKET'
-      ? 'PREMKT'
-      : 'WATCH';
-
   const flushReadyCount = snapshot.grouped_candidates.READY_FOR_REVIEW?.length || 0;
   const flushWatchingCount = snapshot.grouped_candidates.WATCHING?.length || 0;
   const wmLiveCount = wmScan?.total_active_or_forming ?? 0;
 
   return (
     <div className="app-shell app-shell-lhs">
-      {/* ==================== PERSISTENT 3-ITEM LHS NAVIGATION RAIL ==================== */}
+      {/* ==================== PERSISTENT 2-ITEM IRA LONG-ONLY LHS NAVIGATION RAIL ==================== */}
       <aside className="lhs-nav-rail" aria-label="Primary Workspace Navigation">
         <div className="lhs-brand-box">
           <span className="brand-dot" />
           <div>
-            <h1 className="lhs-brand-title">QUANT DESK OS</h1>
-            <span className="lhs-brand-sub tabular">{snapshot.server_time_et}</span>
+            <h1 className="lhs-brand-title">IRA QUANT DESK</h1>
+            <span className="lhs-brand-sub tabular">
+              5WJ26897 Long-Only · {snapshot.server_time_et}
+            </span>
           </div>
         </div>
 
         <nav className="lhs-nav-list" role="navigation" aria-label="Workstation Views">
-          {/* 1. NVDA monitor */}
-          <button
-            type="button"
-            className={`lhs-nav-item ${activeView === 'NVDA' ? 'active' : ''} sev-${nvdaSeverity}`}
-            onClick={() => handleSwitchView('NVDA')}
-          >
-            <div className="lhs-item-top">
-              <span className="lhs-item-label">NVDA monitor</span>
-              <span className={`ws-nvda-pill pill-sev-${nvdaSeverity}`}>
-                {nvdaShortBadge}
-              </span>
-            </div>
-            <div className="lhs-item-sub tabular">
-              <span>CRWV / SOXL Tailwind</span>
-              {nvdaState?.ok && nvdaState.nvda && (
-                <strong>${nvdaState.nvda.last.toFixed(2)}</strong>
-              )}
-            </div>
-          </button>
-
-          {/* 2. Flush monitor */}
+          {/* 1. Flush monitor */}
           <button
             type="button"
             className={`lhs-nav-item ${activeView === 'FLUSH' ? 'active' : ''}`}
@@ -923,19 +845,19 @@ export const App: React.FC = () => {
               </span>
             </div>
             <div className="lhs-item-sub tabular">
-              <span>V5 Rule 10b-18 Reclaim</span>
+              <span>IRA Long · V5 5m VWAP</span>
               <strong>{snapshot.spy_gate.gate_status}</strong>
             </div>
           </button>
 
-          {/* 3. Whole market audit */}
+          {/* 2. Market monitor */}
           <button
             type="button"
-            className={`lhs-nav-item ${activeView === 'AUDIT' ? 'active' : ''}`}
-            onClick={() => handleSwitchView('AUDIT')}
+            className={`lhs-nav-item ${activeView === 'MARKET' ? 'active' : ''}`}
+            onClick={() => handleSwitchView('MARKET')}
           >
             <div className="lhs-item-top">
-              <span className="lhs-item-label">Whole market audit</span>
+              <span className="lhs-item-label">Market monitor</span>
               <span
                 className={`lhs-count-pill ${
                   wmLiveCount > 0 ? 'pill-ready' : 'pill-watch'
@@ -945,9 +867,9 @@ export const App: React.FC = () => {
               </span>
             </div>
             <div className="lhs-item-sub tabular">
-              <span>5-Sleeve Scanner · 10.5k</span>
+              <span>IRA Long · 15:55 Close</span>
               <strong>
-                {wmScan ? `${(wmScan.quotes_received / 1000).toFixed(1)}k US` : '4.7k US'}
+                {wmScan ? `${(wmScan.quotes_received / 1000).toFixed(1)}k US` : '3.8k US'}
               </strong>
             </div>
           </button>
@@ -968,16 +890,10 @@ export const App: React.FC = () => {
 
           <button
             type="button"
-            className={`lhs-alert-btn ${
-              nvdaAudioEnabled || flushAlertsEnabled ? 'armed' : ''
-            }`}
-            onClick={() => {
-              const next = !(nvdaAudioEnabled || flushAlertsEnabled);
-              if (next !== nvdaAudioEnabled) handleToggleNvdaAudio();
-              handleToggleFlushAlerts(next);
-            }}
+            className={`lhs-alert-btn ${flushAlertsEnabled ? 'armed' : ''}`}
+            onClick={() => handleToggleFlushAlerts(!flushAlertsEnabled)}
           >
-            {nvdaAudioEnabled || flushAlertsEnabled
+            {flushAlertsEnabled
               ? '🔔 Audio + Desktop ARMED'
               : '🔔 Enable Audio Alerts'}
           </button>
@@ -988,7 +904,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               className="btn-chime-mini"
-              onClick={() => playNvdaAlertChime('SIGNAL')}
+              onClick={() => playAlertChime('SIGNAL')}
               title="Test Signal Chime"
             >
               🔊
@@ -1012,25 +928,17 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* ==================== VIEW 1: NVDA MONITOR ==================== */}
-        {activeView === 'NVDA' && (
-          <NvdaDashboardView
-            state={nvdaState}
-            audioEnabled={nvdaAudioEnabled}
-            onToggleAudio={handleToggleNvdaAudio}
-            onTestChime={() => playNvdaAlertChime('SIGNAL')}
-            onRefresh={handleForceRefreshNvda}
-            isRefreshing={nvdaRefreshing}
-          />
-        )}
-
-        {/* ==================== VIEW 3: WHOLE MARKET AUDIT & MULTI-STRAT SCANNER ==================== */}
-        {activeView === 'AUDIT' && (
+        {/* ==================== VIEW 2: IRA LONG-ONLY MARKET MONITOR ==================== */}
+        {activeView === 'MARKET' && (
           <WholeMarketAuditView
             scan={wmScan}
             audit={wmAudit}
             bookCapital={wmBookCapital}
             onChangeBookCapital={handleChangeBookCapital}
+            hedgeMode={wmHedgeMode}
+            onChangeHedgeMode={handleChangeHedgeMode}
+            etpMode={wmEtpMode}
+            onChangeEtpMode={handleChangeEtpMode}
             onRefreshScan={handleForceRefreshWholeMarket}
             isRefreshing={wmRefreshing}
             autoPoll={wmAutoPoll}
@@ -1039,7 +947,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* ==================== VIEW 2: FLUSH MONITOR CONTEXTUAL HEADER ==================== */}
+        {/* ==================== VIEW 1: FLUSH MONITOR CONTEXTUAL HEADER ==================== */}
         {activeView === 'FLUSH' && (
           <header className="top-header">
             <div className="brand-and-nav">

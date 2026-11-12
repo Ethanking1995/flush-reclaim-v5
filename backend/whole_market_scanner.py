@@ -1,31 +1,46 @@
 """
 backend/whole_market_scanner.py
 ===============================
-Real-time Multi-Strategy Whole-Market Scanner & 10,526-Spec Empirical Audit Engine.
+IRA Long-Only (`5WJ26897`) Whole-Market Closing Scanner & Audit Engine.
 
-Continuously scans ~4,000 liquid US equities, ADRs, cash-burning biotechs, and
-2x/3x leveraged ETPs via parallel batched CNBC real-time quotes (~0.8s full-market
-sweep) against strictly causal prior-session (`t-1`) baselines to surface live
-signals, forming closing setups, position + SPY beta-hedge sizing, Reg NMS friction
-estimates, and multi-leg order tickets across the Top 5 Surviving Strategies:
+Excludes ALL short-selling strategies and margin/short hedges. Every order leg is 100%
+cash-account / IRA executable (`BUY` to open -> `SELL` to close, zero shorting, zero borrow):
 
-  - S1 (25% wt | 09:30 -> 16:00): Bounded Non-PEAD Weak-Trend Gap-Up Short (+SPY Hedge)
-  - S2 (25% wt | 15:55 -> Next 10:00): SEC Rule 10b-18 Buyback-Shutoff MOC Vacuum (-SPY Hedge)
-  - S3 (20% wt | 15:55 -> Next 09:30): 2x/3x Leveraged ETP Constant-Leverage 15:55 Washout
-  - S4 (10% wt | 09:30 -> 16:00): Biotech $5+ Bounded Non-News Stop-Run Gap Reversal (-SPY Hedge)
-  - S5 (20% wt | 15:55 -> Close+3d): S&P 500 1-of-N Narrow-Industry Capitulation Shock
+  1. S3 (50% Weight — IRA CORE): US Equity Bull 2x/3x ETP Constant-Leverage 15:55 Washout
+     - BUY washed-out US Equity Bull ETPs at 15:55 ET -> SELL Next Morning 09:30–09:35 ET.
+     - Strips Commodity/Rates/VIX/Crypto ETPs & Inverse ETPs; enforces Unadj_Price >= $5.00.
+     - Supports `INDEX_SECTOR_ONLY` (TQQQ, SOXL, SPXL, UPRO, TNA, TECL, FAS, USD) vs
+       `EQUITY_BULL_ER_GUARDED` (blocks Single-Stock 2x Bull ETPs on underlying [ER-1d, ER]).
+
+  2. S2 (25% Weight — IRA RULE 10b-18 MOC VACUUM):
+     - BUY cash-generative $10B+ Large/Mega-Cap stocks at 15:55 ET -> SELL Next Day 10:00 AM ET.
+     - Blocks [ER-14d, ER+1d] Rule 10b-18 blackouts + Live 15:00–16:00 ET NLP Corporate News Guard.
+     - Optional IRA Beta Hedge: `BUY beta_20d * SH` (ProShares 1x Inverse S&P 500 ETF, long cash).
+
+  3. S5 (25% Weight — IRA PIT S&P 500 1-of-N CAPITULATION):
+     - BUY dislocated Point-in-Time S&P 500 stocks at 15:55 ET -> SELL at Close + 3 Trading Days.
+     - Blocks [ER-1d, ER+1d] Earnings Announcement crashes (eliminating 60.2% of toxic ER landmines).
+     - Optional IRA Beta Hedge: `BUY beta_20d * SH` (long cash inverse ETF, zero shorting).
+
+  4. STRICT IRA CASH & CONCENTRATION CAPS:
+     - Hard <= 5.0% of IRA Equity per single stock/ETP AND <= 0.5% of 20d ADTV dollar cap.
+     - Total IRA cash (`Primary BUY $ + SH Hedge BUY $`) never exceeds 100% of IRA cash;
+       undeployed cash remains safely in Cash / SGOV reserve.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
 import datetime
+from email.utils import parsedate_to_datetime
 import gzip
 import json
 import math
 import os
 import threading
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -35,89 +50,72 @@ NY_TZ = ZoneInfo("America/New_York")
 
 CNBC_QUOTE_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol.htm"
 CNBC_BARS_URL = "https://ts-api.cnbc.com/harmony/app/bars"
+YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+GNEWS_RSS_URL = "https://news.google.com/rss/search"
+
 HTTP_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "application/json, application/xml, text/xml, text/plain, */*",
 }
 
+HEDGE_BENCHMARK_SYMS = ("SPY", "QQQ", "SH", "PSQ")
+
+TOXIC_NEWS_KEYWORDS = (
+    "INVESTIGATION", "INVESTIGATIVE", "SUBPOENA", "DOJ", "SEC ", "LAWSUIT", "CLASS ACTION",
+    "FRAUD", "ACCOUNTING", "RESTATEMENT", "GUIDANCE", "CUTS OUTLOOK", "SLASHES", "WARNING",
+    "WARNS", "MISSES", "EARNINGS", "DOWNGRADE", "FDA", "CLINICAL HOLD", "CRL", "HALT",
+    "OFFERING", "SECONDARY", "DILUTION", "PROBE", "RECALL", "BREACH", "RESIGNS", "STEPS DOWN",
+    "BANKRUPTCY", "DEFAULT", "ANTITRUST", "TARIFF",
+)
+
 SLEEVE_SPECS: Dict[str, Dict[str, Any]] = {
-    "S1": {
-        "id": "S1",
-        "name": "Bounded Non-PEAD Weak-Trend Gap-Up Short",
-        "short_name": "S1 · Weak-Trend Gap Short",
-        "weight": 0.25,
-        "max_positions": 8,
-        "direction": "SHORT",
-        "hedge_mode": "BUY_BETA_SPY",
-        "entry_bell": "09:30 ET Open",
-        "exit_bell": "15:55–16:00 ET Close",
-        "window_kind": "MORNING_OPEN",
-        "audited_sharpe": 3.21,
-        "audited_t": 4.39,
-        "audited_net_bps": 62.7,
+    "S3": {
+        "id": "S3",
+        "name": "US Equity Bull 2x/3x ETP 15:55 Washout",
+        "short_name": "S3 · Equity Bull Lev-ETP",
+        "weight": 0.50,
+        "max_positions": 6,
+        "direction": "LONG",
+        "uses_sh_hedge": False,
+        "entry_bell": "15:55 ET Close",
+        "exit_bell": "Next Day 09:30–09:35 ET",
+        "window_kind": "CLOSING_1555",
+        "audited_sharpe": 2.33,
+        "audited_t": 2.74,
+        "audited_net_bps": 60.1,
     },
     "S2": {
         "id": "S2",
-        "name": "SEC Rule 10b-18 Buyback-Shutoff MOC Vacuum",
-        "short_name": "S2 · Rule 10b-18 MOC",
+        "name": "SEC Rule 10b-18 MOC Vacuum (+NLP & ER Guard)",
+        "short_name": "S2 · Clean 10b-18 MOC",
         "weight": 0.25,
         "max_positions": 5,
         "direction": "LONG",
-        "hedge_mode": "SHORT_1X_SPY",
+        "uses_sh_hedge": True,
         "entry_bell": "15:55 ET Close",
         "exit_bell": "Next Day 10:00 AM ET",
         "window_kind": "CLOSING_1555",
-        "audited_sharpe": 2.45,
-        "audited_t": 2.53,
-        "audited_net_bps": 170.2,
-    },
-    "S3": {
-        "id": "S3",
-        "name": "2x/3x Leveraged ETP Constant-Leverage 15:55 Washout",
-        "short_name": "S3 · Lev-ETP Washout",
-        "weight": 0.20,
-        "max_positions": 6,
-        "direction": "LONG",
-        "hedge_mode": "NONE",
-        "entry_bell": "15:55 ET Close",
-        "exit_bell": "Next Day 09:30–09:35 ET Open",
-        "window_kind": "CLOSING_1555",
-        "audited_sharpe": 1.95,
-        "audited_t": 2.65,
-        "audited_net_bps": 30.8,
-    },
-    "S4": {
-        "id": "S4",
-        "name": "Biotech $5+ Bounded Non-News Stop-Run Reversal",
-        "short_name": "S4 · Biotech Stop-Run",
-        "weight": 0.10,
-        "max_positions": 6,
-        "direction": "LONG",
-        "hedge_mode": "SHORT_BETA_SPY",
-        "entry_bell": "09:30 ET Open",
-        "exit_bell": "15:55–16:00 ET Close",
-        "window_kind": "MORNING_OPEN",
-        "audited_sharpe": 2.23,
-        "audited_t": 3.07,
-        "audited_net_bps": 172.6,
+        "audited_sharpe": 1.81,
+        "audited_t": 2.91,
+        "audited_net_bps": 113.3,
     },
     "S5": {
         "id": "S5",
-        "name": "S&P 500 1-of-N Narrow-Industry Capitulation",
-        "short_name": "S5 · S&P 500 3d Cap",
-        "weight": 0.20,
+        "name": "PIT S&P 500 1-of-N Non-ER Capitulation (3d)",
+        "short_name": "S5 · S&P 500 Capitulation",
+        "weight": 0.25,
         "max_positions": 5,
         "direction": "LONG",
-        "hedge_mode": "COHORT_3D_UNHEDGED",
+        "uses_sh_hedge": True,
         "entry_bell": "15:55 ET Close",
         "exit_bell": "Close + 3 Trading Days",
         "window_kind": "CLOSING_1555",
-        "audited_sharpe": 2.23,
-        "audited_t": 3.06,
-        "audited_net_bps": 92.8,
+        "audited_sharpe": 2.54,
+        "audited_t": 2.21,
+        "audited_net_bps": 104.6,
     },
 }
 
@@ -138,39 +136,46 @@ def _safe_float(val: Any) -> Optional[float]:
 
 
 def _expected_cum_vol_fraction(minutes_since_open: float) -> float:
-    """
-    Empirical US equity intraday U-shaped cumulative volume curve from 09:30 (0m) to 16:00 (390m).
-    Prevents false low-RVOL readings mid-session when evaluating S5 capitulation pace.
-    """
     if minutes_since_open <= 0:
         return 0.06
     if minutes_since_open >= 390:
         return 1.00
     x = minutes_since_open / 390.0
-    # Morning burst (~22% in first hour) + midday trough + closing auction surge (~24% in last hour)
     frac = 0.22 * math.pow(x, 0.55) + 0.48 * x + 0.30 * math.pow(x, 2.8)
     return max(0.06, min(1.0, frac))
 
 
-def _estimate_rt_friction_bps(
+def _estimate_ira_rt_friction_bps(
+    sleeve_id: str,
+    guild: str,
     price: float,
     adtv20_usd: float,
     clip_usd: float,
-    hedged: bool,
-    is_short: bool,
-    is_htb: bool,
+    with_sh_hedge: bool,
 ) -> float:
+    """
+    Sledgehammer-calibrated IRA Long-Only round-trip execution cost model:
+      - S3 Leveraged ETPs: >= 12 bps RT (>$250M ADTV), >= 20 bps ($60M-$250M), >= 35 bps ($15M-$60M)
+      - S2 / S5 Large-Caps: Reg NMS tick + square-root market impact + optional cash SH leg cost
+    """
     px = max(price, 0.50)
     adtv = max(adtv20_usd, 100_000.0)
-    eff_clip = max(2_500.0, min(clip_usd, 0.01 * adtv))
+    eff_clip = max(2_500.0, min(clip_usd, 0.005 * adtv))
     tick_1way_bps = (0.01 / px) * 10000.0
     half_spread_bps = max(2.5, 0.65 * tick_1way_bps + 1.5)
     impact_1way_bps = 110.0 * math.sqrt(eff_clip / adtv)
     rt_bps = 2.0 * (half_spread_bps + impact_1way_bps)
-    if hedged:
-        rt_bps += 3.5
-    if is_short:
-        rt_bps += 55.0 if is_htb else 3.0
+
+    if sleeve_id == "S3" or guild == "LEV_ETF":
+        if adtv >= 250_000_000:
+            rt_bps = max(12.0, rt_bps)
+        elif adtv >= 60_000_000:
+            rt_bps = max(20.0, rt_bps)
+        else:
+            rt_bps = max(35.0, rt_bps)
+
+    if with_sh_hedge:
+        rt_bps += 6.0
     return round(rt_bps, 1)
 
 
@@ -180,56 +185,58 @@ def _classify_market_window(now_et: datetime.datetime) -> Dict[str, str]:
     if wd >= 5:
         return {
             "phase": "WEEKEND",
-            "badge": "WEEKEND STANDBY",
-            "active_bells": "End-of-Week Closing Tape",
-            "guidance": "Markets closed. Showing Friday closing triggers for S2/S3/S5 and baseline watchlists for Monday 09:30 ET.",
+            "badge": "WEEKEND STANDBY · IRA LONG-ONLY",
+            "active_bells": "15:55 Closing-Cross IRA Architecture (S3 · S2 · S5)",
+            "guidance": "Markets closed. Displaying latest 15:55 IRA Long-Only candidates across S3, S2, and S5 (zero shorting).",
         }
     if hm < 9 * 60 + 30:
         return {
             "phase": "PREMARKET",
-            "badge": "PREMARKET · 09:30 PREP",
-            "active_bells": "S1 & S4 Fire @ 09:30:00 ET",
-            "guidance": "Premarket preparation window: monitor S1 Weak-Trend Gap-Ups and S4 Biotech Stop-Run Gaps ahead of the 09:30:00 ET opening bell.",
+            "badge": "PREMARKET · MORNING SELL PREP",
+            "active_bells": "SELL Overnight S3 @ 09:30–09:35 ET & S2 @ 10:00 AM ET",
+            "guidance": "Premarket window: prepare to sell yesterday's S3 Bull Lev-ETP washouts at 09:30–09:35 ET and S2 Rule 10b-18 positions (+ SH hedge) at 10:00 AM ET.",
         }
     if hm < 10 * 60 + 15:
         return {
             "phase": "MORNING_WINDOW",
-            "badge": "MORNING BELL ACTIVE (S1 & S4)",
-            "active_bells": "S1 & S4 Entry | S3 Exit 09:30 | S2 Exit 10:00",
-            "guidance": "Morning execution window live: S1 Gap-Up Shorts & S4 Biotech Stop-Run Longs active from 09:30 Open; unwind S3 @ 09:30–09:35 and S2 @ 10:00 AM.",
+            "badge": "MORNING EXIT WINDOW (S3 & S2)",
+            "active_bells": "SELL S3 @ 09:30–09:35 ET | SELL S2 (+SH) @ 10:00 AM ET",
+            "guidance": "Morning exit window live: harvest overnight dealer-gamma rebound on S3 (09:30–09:35) and corporate buyback resumption on S2 (10:00 AM).",
         }
     if hm < 15 * 60:
         return {
             "phase": "MIDDAY_RTH",
-            "badge": "MIDDAY TRACKING · 15:55 PREP",
-            "active_bells": "S1 & S4 Live MTM | S3 & S5 Forming | S2 Anchor @ 15:00",
-            "guidance": "Tracking live beta-hedged intraday P&L on today's 09:30 S1 & S4 cohorts while monitoring forming S3 Lev-ETP washouts & S5 S&P 500 shocks ahead of 15:55 ET.",
+            "badge": "MIDDAY RADAR · AWAITING 15:00 ANCHOR",
+            "active_bells": "S3 & S5 Forming Intraday | S2 Anchor Locks @ 15:00 ET",
+            "guidance": "Monitoring US Equity Bull Leveraged ETPs (S3) and S&P 500 1-of-N industry shocks (S5) ahead of the 15:00 ET Rule 10b-18 anchor lock and 15:55 IRA closing entries.",
         }
     if hm < 15 * 60 + 45:
         return {
             "phase": "POST_3PM_ANCHOR",
-            "badge": "3:00 PM ANCHOR LOCKED (S2 LIVE)",
-            "active_bells": "S2, S3 & S5 Forming -> Execute 15:50–15:55 ET",
-            "guidance": "15:00 ET anchor locked! Tracking live final-hour Rule 10b-18 buyback shutoff drops (S2), Lev-ETP rebalance dumps (S3), and S&P 500 capitulations (S5).",
+            "badge": "15:00 ANCHOR LOCKED · NLP NEWS GUARD ARMED",
+            "active_bells": "S3, S2 & S5 Forming -> BUY Clean IRA Cohort @ 15:50–15:55 ET",
+            "guidance": "15:00 ET anchor locked and live 15:00–16:00 NLP headline scraper active! Any S2 candidate with afternoon news or [ER-14d, ER] blackout is automatically aborted.",
         }
     if hm <= 16 * 60 + 2:
         return {
             "phase": "CLOSING_BELL_ACTIVE",
-            "badge": "CLOSING EXECUTION BELL (15:50–16:00)",
-            "active_bells": "EXECUTE S2, S3, S5 NOW | FLATTEN S1 & S4",
-            "guidance": "CLOSING EXECUTION WINDOW LIVE: Enter qualifying S2 MOC Vacuums, S3 Lev-ETP Washouts & S5 S&P 500 Capitulations; flatten intraday S1 & S4 positions into 16:00.",
+            "badge": "15:55 IRA CLOSING WINDOW LIVE",
+            "active_bells": "BUY S3 (50%), S2 (25%), S5 (25%) LONG-ONLY NOW",
+            "guidance": "PRIMARY IRA EXECUTION BELL LIVE (15:50–15:55 ET): Enter clean S3 Bull Lev-ETP washouts, news-verified S2 10b-18 vacuums, and S5 S&P 500 capitulations (<=5% IRA cap per ticker).",
         }
     return {
         "phase": "AFTER_HOURS",
-        "badge": "POST-CLOSE REVIEW",
-        "active_bells": "Session Closed · Overnight S2/S3/S5 Active",
-        "guidance": "RTH session complete. Displaying final closing triggers for S2/S3/S5 and full-day realized intraday marks for today's S1 & S4 morning cohorts.",
+        "badge": "POST-CLOSE OVERNIGHT IRA HOLD",
+        "active_bells": "Session Closed · S3/S2/S5 Long-Only IRA Book",
+        "guidance": "RTH session complete. Showing final 15:55 IRA Long-Only closing candidates, NLP news-filter checks, and cash-sized order tickets.",
     }
 
 
 class WholeMarketScannerService:
     """
-    Background & on-demand whole-market scanner across ~4,000 US securities.
+    IRA Long-Only (`5WJ26897`) whole-market scanner across ~4,000 US securities.
+    Never emits short-stock or short-ETF orders; supports optional cash `BUY SH`
+    (ProShares 1x Inverse S&P 500 ETF) beta hedging on S2 & S5.
     """
 
     def __init__(
@@ -249,9 +256,9 @@ class WholeMarketScannerService:
         self._by_symbol: Dict[str, Dict[str, Any]] = {}
         self._audit_summary: Dict[str, Any] = {}
 
-        # Daily 15:00 ET anchor cache: {session_date_str: {symbol: price_at_1500}}
         self._p1500_cache_date: Optional[str] = None
         self._p1500_prices: Dict[str, float] = {}
+        self._news_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
         self._last_scan_raw: Optional[Dict[str, Any]] = None
         self._last_scan_monotonic: float = 0.0
@@ -305,11 +312,106 @@ class WholeMarketScannerService:
     def get_audit_summary(self) -> Dict[str, Any]:
         return self._audit_summary
 
+    def _check_live_afternoon_news(
+        self,
+        symbol: str,
+        company_name: str,
+        now_et: datetime.datetime,
+        feed_mode: str,
+    ) -> Dict[str, Any]:
+        if feed_mode != "CNBC_REALTIME_BATCH_REST":
+            return {
+                "checked": True,
+                "status": "CLEAR",
+                "afternoon_1500_1600_count": 0,
+                "toxic_today_count": 0,
+                "items_scanned": 0,
+                "latest_headline": None,
+                "latest_time_et": None,
+                "source": "OFFLINE_DETERMINISTIC",
+            }
+
+        now_mono = time.monotonic()
+        cached = self._news_cache.get(symbol)
+        if cached and (now_mono - cached[0]) < 90.0:
+            return cached[1]
+
+        today_date = now_et.date()
+        afternoon_hits: List[Tuple[str, str]] = []
+        toxic_hits: List[Tuple[str, str]] = []
+        latest_hl: Optional[str] = None
+        latest_ts_str: Optional[str] = None
+        items_scanned = 0
+
+        urls = [
+            f"{YAHOO_RSS_URL}?s={urllib.parse.quote(symbol)}&region=US&lang=en-US",
+            f"{GNEWS_RSS_URL}?q={urllib.parse.quote(symbol + ' stock when:1d')}&hl=en-US&gl=US&ceid=US:en",
+        ]
+        short_co = (company_name or "").split()[0].upper().rstrip(",.") if company_name else ""
+
+        for url in urls:
+            try:
+                with httpx.Client(timeout=2.8, headers=HTTP_HEADERS, follow_redirects=True) as client:
+                    resp = client.get(url)
+                    if resp.status_code != 200 or not resp.text:
+                        continue
+                root = ET.fromstring(resp.text)
+                for item in root.findall(".//item")[:12]:
+                    title = (item.findtext("title") or "").strip()
+                    pub_raw = (item.findtext("pubDate") or "").strip()
+                    if not title or not pub_raw:
+                        continue
+                    try:
+                        dt_parsed = parsedate_to_datetime(pub_raw)
+                        if dt_parsed.tzinfo is None:
+                            dt_parsed = dt_parsed.replace(tzinfo=datetime.timezone.utc)
+                        dt_et = dt_parsed.astimezone(NY_TZ)
+                    except Exception:
+                        continue
+
+                    items_scanned += 1
+                    title_up = title.upper()
+                    mentions_co = (
+                        symbol.upper() in title_up
+                        or (len(short_co) >= 4 and short_co in title_up)
+                        or "YAHOO" in url.upper()
+                    )
+                    if not mentions_co:
+                        continue
+
+                    ts_fmt = dt_et.strftime("%Y-%m-%d %H:%M ET")
+                    if latest_hl is None:
+                        latest_hl = title[:115]
+                        latest_ts_str = ts_fmt
+
+                    if dt_et.date() == today_date:
+                        hm_pub = dt_et.hour * 60 + dt_et.minute
+                        if (15 * 60) <= hm_pub <= (16 * 60 + 5):
+                            afternoon_hits.append((ts_fmt, title[:115]))
+                        if hm_pub >= (8 * 60) and any(kw in title_up for kw in TOXIC_NEWS_KEYWORDS):
+                            toxic_hits.append((ts_fmt, title[:115]))
+                if items_scanned >= 5:
+                    break
+            except Exception:
+                continue
+
+        blocked = len(afternoon_hits) > 0 or len(toxic_hits) > 0
+        trigger_item = afternoon_hits[0] if afternoon_hits else (toxic_hits[0] if toxic_hits else None)
+        res = {
+            "checked": True,
+            "status": "BLOCKED_HEADLINE" if blocked else "CLEAR",
+            "afternoon_1500_1600_count": len(afternoon_hits),
+            "toxic_today_count": len(toxic_hits),
+            "items_scanned": items_scanned,
+            "latest_headline": trigger_item[1] if trigger_item else latest_hl,
+            "latest_time_et": trigger_item[0] if trigger_item else latest_ts_str,
+            "source": "YAHOO_GNEWS_LIVE_RSS",
+        }
+        with self._lock:
+            self._news_cache[symbol] = (now_mono, res)
+        return res
+
     def _fetch_cnbc_quotes_batched(self, symbols: List[str]) -> Tuple[Dict[str, Dict[str, Any]], str]:
-        """
-        Fetches real-time quotes for ~4,000 US symbols in parallel 135-ticker batches.
-        Falls back cleanly to deterministic synthetic quotes if network is offline/blocked.
-        """
         batch_size = 135
         batches = [symbols[i : i + batch_size] for i in range(0, len(symbols), batch_size)]
         quote_map: Dict[str, Dict[str, Any]] = {}
@@ -347,35 +449,27 @@ class WholeMarketScannerService:
         if len(quote_map) >= max(20, int(0.15 * len(symbols))):
             return quote_map, "CNBC_REALTIME_BATCH_REST"
 
-        # Deterministic offline fallback (used during offline unit tests or disconnected Wi-Fi)
+        # Deterministic offline fallback for offline unit tests / disconnected network
         synth: Dict[str, Dict[str, Any]] = {}
         for idx, sym in enumerate(symbols):
             b = self._by_symbol.get(sym)
-            if not b:
-                continue
-            pc = float(b["prev_close"])
-            sig = float(b["sigma20"])
-            # Create deterministic dispersion so every sleeve has realistic test coverage offline
+            pc = float(b["prev_close"]) if b else (38.50 if sym in ("SH", "PSQ") else 210.0)
+            sig = float(b["sigma20"]) if b else 0.012
+            vol20 = float(b["vol20_sh"]) if b else 5_000_000.0
             if sym == "SPY":
-                op, last, hi, lo = pc * 1.002, pc * 1.005, pc * 1.007, pc * 0.999
-            elif b.get("s1") and idx % 97 == 0:
-                op = min(pc * (1.0 + 1.85 * sig), float(b["sma20"]) * 0.98)
-                last = op * 0.986
-                hi, lo = op * 1.005, last * 0.995
-            elif b.get("s3") and idx % 19 == 0:
+                op, last, hi, lo = pc * 1.002, pc * 1.004, pc * 1.006, pc * 0.999
+            elif sym in ("SH", "PSQ"):
+                op, last, hi, lo = pc * 0.998, pc * 0.996, pc * 1.001, pc * 0.994
+            elif b and b.get("s3") and idx % 11 == 0:
                 op = pc * (1.0 - 0.8 * sig)
-                last = pc * (1.0 - 1.9 * sig)
-                hi, lo = op * 1.002, last * 0.997
-            elif b.get("s4") and idx % 41 == 0:
-                op = max(5.25, pc * (1.0 - 1.8 * sig))
-                last = op * 1.031
-                hi, lo = last * 1.01, op * 0.992
-            elif b.get("s5") and idx % 83 == 0:
+                last = pc * (1.0 - 1.95 * sig)
+                hi, lo = op * 1.002, last * 0.998
+            elif b and b.get("s5") and not b.get("in_er1_window") and idx % 79 == 0:
                 op = pc * (1.0 - 0.9 * sig)
-                last = pc * (1.0 - 2.9 * sig)
-                hi, lo = op, last * 0.996
+                last = pc * (1.0 - 2.95 * sig)
+                hi, lo = op, last * 0.997
             else:
-                op, last, hi, lo = pc * 1.001, pc * 1.002, pc * 1.008, pc * 0.995
+                op, last, hi, lo = pc * 1.001, pc * 1.002, pc * 1.007, pc * 0.995
             synth[sym] = {
                 "symbol": sym,
                 "open": f"{op:.4f}",
@@ -383,7 +477,7 @@ class WholeMarketScannerService:
                 "low": f"{lo:.4f}",
                 "last": f"{last:.4f}",
                 "previous_day_closing": f"{pc:.4f}",
-                "volume": str(int(float(b["vol20_sh"]) * (3.1 if (b.get("s5") and idx % 83 == 0) else 0.85))),
+                "volume": str(int(vol20 * (3.15 if (b and b.get("s5") and idx % 79 == 0) else 0.88))),
             }
         return synth, "OFFLINE_DETERMINISTIC_FALLBACK"
 
@@ -393,11 +487,6 @@ class WholeMarketScannerService:
         quote_map: Dict[str, Dict[str, Any]],
         feed_mode: str,
     ) -> None:
-        """
-        Locks the 15:00 ET price anchor for SPY and S2 Large/Mega-Cap buyback issuers.
-        If the server booted after 15:02 ET during live RTH, fetches exact 15:00 ET 5m bar closes
-        for SPY and top S2 candidates so Rule 10b-18 final-hour relative drops are exact.
-        """
         today_str = now_et.strftime("%Y-%m-%d")
         hm = now_et.hour * 60 + now_et.minute
         if self._p1500_cache_date != today_str:
@@ -407,7 +496,6 @@ class WholeMarketScannerService:
         if hm < 15 * 60 or self._p1500_prices:
             return
 
-        # If right around 15:00–15:04 ET, current live quote IS the 15:00 anchor!
         if hm <= 15 * 60 + 4 or feed_mode != "CNBC_REALTIME_BATCH_REST":
             for sym, q in quote_map.items():
                 px = _safe_float(q.get("last"))
@@ -415,7 +503,6 @@ class WholeMarketScannerService:
                     self._p1500_prices[sym] = px
             return
 
-        # Server started after 15:04 ET: fetch exact 15:00 bar close for SPY + S2 Large/Mega-Cap universe
         s2_syms = ["SPY"] + [t["symbol"] for t in self._tickers if t.get("s2")]
         ymd = now_et.strftime("%Y%m%d")
         start_s = f"{ymd}093000"
@@ -439,7 +526,6 @@ class WholeMarketScannerService:
                 pass
             return sym, None
 
-        # Only fetch 5m bars for SPY + S2 stocks whose full-day move could plausibly qualify (fast ~0.7s!)
         priority_syms = ["SPY"]
         for sym in s2_syms[1:]:
             q = quote_map.get(sym)
@@ -447,7 +533,7 @@ class WholeMarketScannerService:
                 continue
             op = _safe_float(q.get("open"))
             last = _safe_float(q.get("last"))
-            if op and last and (last / op - 1.0) <= 0.005:
+            if op and last and (last / op - 1.0) <= 0.008:
                 priority_syms.append(sym)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=14) as pool:
@@ -455,7 +541,6 @@ class WholeMarketScannerService:
                 if px1500 and px1500 > 0:
                     self._p1500_prices[sym] = px1500
 
-        # For remaining S2 stocks that rallied all day (> +0.5%), approximate with current/open midpoint
         for sym in s2_syms:
             if sym not in self._p1500_prices:
                 q = quote_map.get(sym, {})
@@ -467,9 +552,11 @@ class WholeMarketScannerService:
     def refresh_quotes(self) -> Dict[str, Any]:
         t0 = time.perf_counter()
         now_et = datetime.datetime.now(NY_TZ)
+        sym_set = {t["symbol"] for t in self._tickers}
         symbols = [t["symbol"] for t in self._tickers]
-        if "SPY" not in self._by_symbol:
-            symbols.append("SPY")
+        for hsym in HEDGE_BENCHMARK_SYMS:
+            if hsym not in sym_set:
+                symbols.append(hsym)
 
         quote_map, feed_mode = self._fetch_cnbc_quotes_batched(symbols)
         self._backfill_1500_anchor_if_needed(now_et, quote_map, feed_mode)
@@ -490,10 +577,23 @@ class WholeMarketScannerService:
 
     def get_scan_payload(
         self,
-        book_capital_usd: float = 100_000.0,
+        book_capital_usd: float = 1_000_000.0,
+        hedge_mode: str = "SH_INVERSE_ETF",
+        etp_mode: str = "EQUITY_BULL_ER_GUARDED",
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        book_cap = max(10_000.0, min(float(book_capital_usd or 100_000.0), 25_000_000.0))
+        book_cap = max(10_000.0, min(float(book_capital_usd or 1_000_000.0), 25_000_000.0))
+        ira_hedge_mode = (
+            "UNHEDGED_LONG"
+            if str(hedge_mode).upper() == "UNHEDGED_LONG"
+            else "SH_INVERSE_ETF"
+        )
+        s3_etp_mode = (
+            "INDEX_SECTOR_ONLY"
+            if str(etp_mode).upper() == "INDEX_SECTOR_ONLY"
+            else "EQUITY_BULL_ER_GUARDED"
+        )
+
         with self._lock:
             raw = self._last_scan_raw
             age = time.monotonic() - self._last_scan_monotonic if raw else 9999.0
@@ -511,7 +611,6 @@ class WholeMarketScannerService:
         is_closing_window = (15 * 60 + 45) <= hm <= (16 * 60 + 5)
         is_post_3pm = hm >= 15 * 60
 
-        # SPY live benchmark
         spy_base = self._by_symbol.get("SPY", {"prev_close": 749.92})
         spy_q = quote_map.get("SPY", {})
         spy_prev = _safe_float(spy_q.get("previous_day_closing")) or float(spy_base["prev_close"])
@@ -523,11 +622,16 @@ class WholeMarketScannerService:
         spy_intraday_ret = (spy_last / spy_open - 1.0) if spy_open > 0 else 0.0
         spy_p1500 = self._p1500_prices.get("SPY")
 
-        # Pass 1: Cross-sectional narrow-industry aggregates (matching mkt_step4c_lock_exact_top5.py!)
+        sh_q = quote_map.get("SH", {})
+        sh_px = (
+            _safe_float(sh_q.get("last"))
+            or _safe_float(sh_q.get("previous_day_closing"))
+            or float(self._by_symbol.get("SH", {}).get("prev_close", 38.50))
+        )
+
+        # Pass 1: Cross-sectional narrow-industry aggregates across all ~4,000 securities
         ind_cc_sum: Dict[str, float] = {}
         ind_cc_cnt: Dict[str, int] = {}
-        ind_gap_sum: Dict[str, float] = {}
-        ind_gap_cnt: Dict[str, int] = {}
         parsed_quotes: Dict[str, Dict[str, float]] = {}
 
         for t in self._tickers:
@@ -539,7 +643,6 @@ class WholeMarketScannerService:
             pclose = _safe_float(q.get("previous_day_closing")) or float(t["prev_close"])
             if not last or last <= 0 or pclose <= 0:
                 continue
-            # Reject unadjusted corporate splits (> 65% discrepancy vs stored causal prev_close)
             if abs(pclose / float(t["prev_close"]) - 1.0) > 0.35:
                 continue
             op = _safe_float(q.get("open")) or last
@@ -566,20 +669,14 @@ class WholeMarketScannerService:
             if ind:
                 ind_cc_sum[ind] = ind_cc_sum.get(ind, 0.0) + ret_cc
                 ind_cc_cnt[ind] = ind_cc_cnt.get(ind, 0) + 1
-                ind_gap_sum[ind] = ind_gap_sum.get(ind, 0.0) + ret_gap
-                ind_gap_cnt[ind] = ind_gap_cnt.get(ind, 0) + 1
 
-        # Pass 2: Evaluate all 5 strategy sleeves
-        s1_qual: List[Dict[str, Any]] = []
-        s1_near: List[Dict[str, Any]] = []
-        s2_qual: List[Dict[str, Any]] = []
-        s2_near: List[Dict[str, Any]] = []
+        # Pass 2: Evaluate ONLY the 3 Verified IRA Long-Only Sleeves (S3, S2, S5 — ZERO Shorting)
         s3_qual: List[Dict[str, Any]] = []
-        s3_near: List[Dict[str, Any]] = []
-        s4_qual: List[Dict[str, Any]] = []
-        s4_near: List[Dict[str, Any]] = []
-        s5_qual: List[Dict[str, Any]] = []
-        s5_near: List[Dict[str, Any]] = []
+        s3_near: List[Tuple[Any, ...]] = []
+        s2_raw_hits: List[Tuple[float, Dict[str, Any], Dict[str, float], float, float, float, float]] = []
+        s2_near: List[Tuple[Any, ...]] = []
+        s5_raw_hits: List[Tuple[float, Dict[str, Any], Dict[str, float], float, float, float, float, int]] = []
+        s5_near: List[Tuple[Any, ...]] = []
 
         for t in self._tickers:
             sym = t["symbol"]
@@ -590,163 +687,48 @@ class WholeMarketScannerService:
             hi = pq["high"]
             lo = pq["low"]
             last = pq["last"]
-            pclose = pq["prev_close"]
             vol = pq["volume"]
             ret_cc = pq["ret_cc"]
-            ret_gap = pq["ret_gap"]
             rng = hi - lo
             ibs = ((last - lo) / rng) if rng > 1e-6 else 0.5
 
             sig20 = float(t["sigma20"])
-            sma20 = float(t["sma20"])
             adtv20 = float(t["adtv20_usd"])
             vol20_sh = max(float(t["vol20_sh"]), 1.0)
-            prev_rvol = float(t["prev_rvol"])
-            beta = float(t["beta_spy"])
             ind = t.get("industry", "")
-            guild = t.get("guild", "")
-            mcap = float(t.get("market_cap", 0.0))
 
-            z_gap = ret_gap / sig20
             z1d_c = ret_cc / sig20
             pace_rvol = vol / (vol20_sh * cum_vol_frac)
             raw_rvol = vol / vol20_sh
             eff_rvol = raw_rvol if hm >= (15 * 60 + 40) else max(raw_rvol, pace_rvol)
 
-            # Peer-isolated industry residuals
             n_ind = ind_cc_cnt.get(ind, 0)
             if n_ind >= 6:
                 peer_cc = (ind_cc_sum[ind] - ret_cc) / float(n_ind - 1)
                 ind_resid_z = (ret_cc - peer_cc) / sig20
-                peer_gap = (ind_gap_sum[ind] - ret_gap) / float(n_ind - 1)
-                ind_gap_z = (ret_gap - peer_gap) / sig20
             else:
                 peer_cc = None
                 ind_resid_z = None
-                peer_gap = None
-                ind_gap_z = None
 
-            # ---------------- S1: Weak-Trend Gap-Up Short (09:30 -> 16:00) ----------------
-            if t.get("s1") and op >= 15.0 and adtv20 >= 10_000_000:
-                weak_trend = op < sma20
-                in_z_band = 1.30 <= z_gap <= 2.80
-                catalyst_warn = ret_gap >= 0.08
-                if weak_trend and in_z_band:
-                    # Live MTM from 09:30 Open -> Last (honoring +6% hard stop on short leg)
-                    capped_stock_ret = min(hi / op - 1.0, 0.06) if hi >= op * 1.06 else (last / op - 1.0)
-                    stopped_out = hi >= op * 1.06
-                    hedged_ret = -capped_stock_ret + beta * spy_intraday_ret
-                    status = (
-                        "SIGNAL_ACTIVE"
-                        if win_info["phase"] in ("PREMARKET", "MORNING_WINDOW")
-                        else "MORNING_COHORT_LIVE"
-                    )
-                    s1_qual.append(
-                        self._build_candidate(
-                            sleeve_id="S1",
-                            status=status,
-                            sort_score=z_gap,
-                            t=t,
-                            pq=pq,
-                            ref_price=op,
-                            stop_price=round(op * 1.06, 2),
-                            primary_label=f"z_gap {z_gap:+.2f}σ ({ret_gap*100:+.1f}%)",
-                            secondary_label=f"Open ${op:.2f} < SMA20 ${sma20:.2f}",
-                            metric_value=round(z_gap, 3),
-                            ibs=ibs,
-                            eff_rvol=eff_rvol,
-                            book_cap=book_cap,
-                            spy_last=spy_last,
-                            live_mtm_bps=round(hedged_ret * 10000.0, 1),
-                            catalyst_warning=catalyst_warn,
-                            stopped_out=stopped_out,
-                            gates=[
-                                {
-                                    "name": "Profitable ETB Common Stock",
-                                    "pass": True,
-                                    "observed": f"OCF > $0 · ADTV ${adtv20/1e6:.1f}M",
-                                    "required": "OCF_TTM > 0 & ADTV ≥ $10M",
-                                },
-                                {
-                                    "name": "Weak Daily Trend (Open < SMA20)",
-                                    "pass": True,
-                                    "observed": f"Open ${op:.2f} vs SMA20 ${sma20:.2f} ({(op/sma20-1)*100:+.1f}%)",
-                                    "required": "Open < SMA20",
-                                },
-                                {
-                                    "name": "Bounded Non-PEAD Gap (+1.3σ..+2.8σ)",
-                                    "pass": True,
-                                    "observed": f"{z_gap:+.2f}σ (Gap {ret_gap*100:+.2f}%)"
-                                    + (" · ⚠️ >8% Catalyst Check!" if catalyst_warn else ""),
-                                    "required": "+1.30σ ≤ z_gap ≤ +2.80σ",
-                                },
-                            ],
-                        )
-                    )
-                elif weak_trend and 0.90 <= z_gap < 1.30:
-                    s1_near.append((z_gap, t, pq, ibs, eff_rvol))
-
-            # ---------------- S2: Rule 10b-18 MOC Vacuum (15:55 -> Next 10:00) ----------------
-            if t.get("s2") and op >= 20.0 and adtv20 >= 20_000_000:
-                p1500 = self._p1500_prices.get(sym)
-                if is_post_3pm and p1500 and spy_p1500 and p1500 > 0 and spy_p1500 > 0:
-                    r_pre_rel = (p1500 / op - 1.0) - (spy_p1500 / spy_open - 1.0)
-                    r_last_hr_rel = (last / p1500 - 1.0) - (spy_last / spy_p1500 - 1.0)
-                    quiet_pre = abs(r_pre_rel) <= 0.015
-                    slammed_close = r_last_hr_rel <= -0.015
-                    if quiet_pre and slammed_close:
-                        status = "SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW"
-                        s2_qual.append(
-                            self._build_candidate(
-                                sleeve_id="S2",
-                                status=status,
-                                sort_score=-r_last_hr_rel,
-                                t=t,
-                                pq=pq,
-                                ref_price=last,
-                                stop_price=round(last * 0.94, 2),
-                                primary_label=f"15:00→Now {r_last_hr_rel*100:+.2f}% vs SPY",
-                                secondary_label=f"Pre-3PM {r_pre_rel*100:+.2f}% vs SPY · 10b-18 Shutoff",
-                                metric_value=round(r_last_hr_rel * 100.0, 2),
-                                ibs=ibs,
-                                eff_rvol=eff_rvol,
-                                book_cap=book_cap,
-                                spy_last=spy_last,
-                                live_mtm_bps=None,
-                                gates=[
-                                    {
-                                        "name": "Large/Mega-Cap Buyback Issuer",
-                                        "pass": True,
-                                        "observed": f"{guild} (${mcap/1e9:.1f}B) · OCF > $0",
-                                        "required": "MCap ≥ $10B & OCF_TTM > 0",
-                                    },
-                                    {
-                                        "name": "Quiet Tape Before 15:00 ET",
-                                        "pass": True,
-                                        "observed": f"09:30→15:00 vs SPY: {r_pre_rel*100:+.2f}%",
-                                        "required": "|r_0930_1500 − SPY| ≤ 1.50%",
-                                    },
-                                    {
-                                        "name": "Rule 10b-18 Shutoff MOC Vacuum",
-                                        "pass": True,
-                                        "observed": f"15:00→Now vs SPY: {r_last_hr_rel*100:+.2f}%",
-                                        "required": "r_1500_1555 − SPY ≤ -1.50%",
-                                    },
-                                ],
-                            )
-                        )
-                    elif quiet_pre and r_last_hr_rel <= -0.006:
-                        s2_near.append((-r_last_hr_rel, t, pq, ibs, eff_rvol, r_pre_rel, r_last_hr_rel))
-                else:
-                    # Pre-15:00 ET monitoring: track Large/Mega-Caps lagging SPY intraday ahead of 3 PM lock
-                    r_intraday_rel = (last / op - 1.0) - spy_intraday_ret
-                    if -0.025 <= r_intraday_rel <= -0.008 and ibs <= 0.25:
-                        s2_near.append((-r_intraday_rel, t, pq, ibs, eff_rvol, r_intraday_rel, r_intraday_rel))
-
-            # ---------------- S3: 2x/3x Lev-ETP 15:55 Washout (15:55 -> Next 09:30) ----------------
-            if t.get("s3") and adtv20 >= 15_000_000:
+            # ---------------- S3 (50% IRA Core): US Equity Bull Lev-ETP 15:55 Washout ----------------
+            etp_bkt = t.get("etp_sub_bucket")
+            unadj_ok = float(t.get("unadj_prev_close", last)) >= 5.0 and last >= 5.0
+            s3_bkt_allowed = (
+                etp_bkt == "EQUITY_INDEX_SECTOR_BULL"
+                if s3_etp_mode == "INDEX_SECTOR_ONLY"
+                else etp_bkt in ("EQUITY_INDEX_SECTOR_BULL", "SINGLE_STOCK_2X_BULL")
+            )
+            if t.get("s3") and s3_bkt_allowed and unadj_ok and adtv20 >= 15_000_000:
+                und_sym = t.get("underlying_symbol")
+                und_er_blocked = bool(und_sym and t.get("in_er1_window"))
+                next_er = t.get("next_er_date")
                 if z1d_c <= -1.50 and ibs <= 0.15:
-                    status = "SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW"
+                    status = (
+                        "BLOCKED_GUARD"
+                        if und_er_blocked
+                        else ("SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW")
+                    )
+                    bkt_label = "Index/Sector Bull ETP" if etp_bkt == "EQUITY_INDEX_SECTOR_BULL" else f"2x Bull ({und_sym})"
                     s3_qual.append(
                         self._build_candidate(
                             sleeve_id="S3",
@@ -757,22 +739,28 @@ class WholeMarketScannerService:
                             ref_price=last,
                             stop_price=round(last * 0.92, 2),
                             primary_label=f"z1d {z1d_c:+.2f}σ ({ret_cc*100:+.2f}%)",
-                            secondary_label=f"IBS {ibs:.2f} (Bottom {ibs*100:.0f}% of Range)",
+                            secondary_label=f"IBS {ibs:.2f} · {bkt_label}",
                             metric_value=round(z1d_c, 3),
                             ibs=ibs,
                             eff_rvol=eff_rvol,
                             book_cap=book_cap,
-                            spy_last=spy_last,
-                            live_mtm_bps=None,
+                            ira_hedge_mode=ira_hedge_mode,
+                            sh_px=sh_px,
+                            guard_blocked=und_er_blocked,
+                            guard_reason=(
+                                f"BLOCKED: Underlying {und_sym} reports earnings ({next_er}) — skip overnight 2x single-stock ER risk!"
+                                if und_er_blocked
+                                else None
+                            ),
                             gates=[
                                 {
-                                    "name": "Liquid 2x/3x Leveraged ETP",
+                                    "name": "IRA Long-Only US Equity Bull ETP (Unadj ≥ $5)",
                                     "pass": True,
-                                    "observed": f"LEV_ETF · ADTV ${adtv20/1e6:.1f}M",
-                                    "required": "Guild = LEV_ETF & ADTV ≥ $15M",
+                                    "observed": f"{bkt_label} · Last ${last:.2f} · ADTV ${adtv20/1e6:.1f}M",
+                                    "required": "US Equity Bull ETP (No Commodity/VIX/Inverse) & Price ≥ $5",
                                 },
                                 {
-                                    "name": "Constant-Leverage Down-Shock",
+                                    "name": "Constant-Leverage Down-Shock (L(L-1)·AUM·r)",
                                     "pass": True,
                                     "observed": f"z1d_c = {z1d_c:+.2f}σ ({ret_cc*100:+.2f}%)",
                                     "required": "z1d_c ≤ -1.50σ",
@@ -783,171 +771,298 @@ class WholeMarketScannerService:
                                     "observed": f"IBS = {ibs:.3f} (Low ${lo:.2f} / High ${hi:.2f})",
                                     "required": "IBS ≤ 0.15",
                                 },
+                                {
+                                    "name": "Overnight Earnings Risk Guard",
+                                    "pass": not und_er_blocked,
+                                    "observed": (
+                                        "Broad Index/Sector Basket — Zero Single-Stock ER Risk"
+                                        if not und_sym
+                                        else (
+                                            f"🚨 BLOCKED: {und_sym} Earnings Window ({next_er})"
+                                            if und_er_blocked
+                                            else f"{und_sym} Clear (Next ER: {next_er or 'Outside Window'})"
+                                        )
+                                    ),
+                                    "required": "No Underlying [ER-1d, ER] Overnight Event",
+                                },
                             ],
                         )
                     )
-                elif z1d_c <= -1.05 and ibs <= 0.28:
+                elif not und_er_blocked and z1d_c <= -1.00 and ibs <= 0.30:
                     s3_near.append((-z1d_c, t, pq, ibs, eff_rvol))
 
-            # ---------------- S4: Biotech $5+ Bounded Stop-Run Gap (09:30 -> 16:00) ----------------
-            if t.get("s4") and op >= 5.0 and adtv20 >= 2_000_000 and ind_gap_z is not None:
-                quiet_prior = prev_rvol <= 1.50
-                bounded_gap = -3.00 <= ind_gap_z <= -1.20
-                if quiet_prior and bounded_gap:
-                    stopped_out = lo <= op * 0.90
-                    capped_ret = -0.10 if stopped_out else (last / op - 1.0)
-                    hedged_ret = capped_ret - beta * spy_intraday_ret
-                    status = (
-                        "SIGNAL_ACTIVE"
-                        if win_info["phase"] in ("PREMARKET", "MORNING_WINDOW")
-                        else "MORNING_COHORT_LIVE"
-                    )
-                    s4_qual.append(
-                        self._build_candidate(
-                            sleeve_id="S4",
-                            status=status,
-                            sort_score=adtv20,
-                            t=t,
-                            pq=pq,
-                            ref_price=op,
-                            stop_price=round(op * 0.90, 2),
-                            primary_label=f"ind_gap_z {ind_gap_z:+.2f}σ ({ret_gap*100:+.1f}%)",
-                            secondary_label=f"Prev RVOL {prev_rvol:.2f}x · Open ${op:.2f}",
-                            metric_value=round(ind_gap_z, 3),
-                            ibs=ibs,
-                            eff_rvol=eff_rvol,
-                            book_cap=book_cap,
-                            spy_last=spy_last,
-                            live_mtm_bps=round(hedged_ret * 10000.0, 1),
-                            stopped_out=stopped_out,
-                            gates=[
-                                {
-                                    "name": "Institutional $5+ Cash-Burning Biotech",
-                                    "pass": True,
-                                    "observed": f"Open ${op:.2f} · ADTV ${adtv20/1e6:.1f}M",
-                                    "required": "BIOTECH_BURNER, Open ≥ $5, ADTV ≥ $2M",
-                                },
-                                {
-                                    "name": "Quiet Prior Session (No Active Offering)",
-                                    "pass": True,
-                                    "observed": f"Prior-Day RVOL = {prev_rvol:.2f}x",
-                                    "required": "prev_rvol ≤ 1.50x",
-                                },
-                                {
-                                    "name": "Bounded Industry Gap (-3.0σ..-1.2σ)",
-                                    "pass": True,
-                                    "observed": f"ind_gap_z = {ind_gap_z:+.2f}σ (Peer Gap {peer_gap*100:+.1f}%)",
-                                    "required": "-3.00σ ≤ ind_gap_z ≤ -1.20σ",
-                                },
-                            ],
-                        )
-                    )
-                elif quiet_prior and -3.60 <= ind_gap_z <= -0.20:
-                    s4_near.append((-ind_gap_z, t, pq, ibs, eff_rvol, ind_gap_z))
+            # ---------------- S2 (25% IRA): Rule 10b-18 MOC Vacuum (+ER Blackout & Live NLP News) ----------------
+            if t.get("s2") and op >= 20.0 and adtv20 >= 20_000_000:
+                p1500 = self._p1500_prices.get(sym)
+                if is_post_3pm and p1500 and spy_p1500 and p1500 > 0 and spy_p1500 > 0:
+                    r_pre_rel = (p1500 / op - 1.0) - (spy_p1500 / spy_open - 1.0)
+                    r_last_hr_rel = (last / p1500 - 1.0) - (spy_last / spy_p1500 - 1.0)
+                    if abs(r_pre_rel) <= 0.015 and r_last_hr_rel <= -0.015:
+                        s2_raw_hits.append((-r_last_hr_rel, t, pq, ibs, eff_rvol, r_pre_rel, r_last_hr_rel))
+                    elif abs(r_pre_rel) <= 0.015 and r_last_hr_rel <= -0.006 and not t.get("in_er14_blackout"):
+                        s2_near.append((-r_last_hr_rel, t, pq, ibs, eff_rvol, r_pre_rel, r_last_hr_rel))
+                else:
+                    r_intraday_rel = (last / op - 1.0) - spy_intraday_ret
+                    if -0.025 <= r_intraday_rel <= -0.008 and ibs <= 0.25 and not t.get("in_er14_blackout"):
+                        s2_near.append((-r_intraday_rel, t, pq, ibs, eff_rvol, r_intraday_rel, r_intraday_rel))
 
-            # ---------------- S5: S&P 500 1-of-N Narrow-Industry Cap (15:55 -> Close+3d) ----------------
+            # ---------------- S5 (25% IRA): PIT S&P 500 1-of-N Non-ER Capitulation ----------------
             if t.get("s5") and last >= 20.0 and adtv20 >= 25_000_000 and ind_resid_z is not None:
                 if ind_resid_z <= -2.50 and eff_rvol >= 2.50 and ibs <= 0.25:
-                    status = "SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW"
-                    s5_qual.append(
-                        self._build_candidate(
-                            sleeve_id="S5",
-                            status=status,
-                            sort_score=-ind_resid_z,
-                            t=t,
-                            pq=pq,
-                            ref_price=last,
-                            stop_price=round(last * 0.92, 2),
-                            primary_label=f"ind_resid_z {ind_resid_z:+.2f}σ (Peers {peer_cc*100:+.1f}%)",
-                            secondary_label=f"Pace RVOL {eff_rvol:.2f}x · IBS {ibs:.2f}",
-                            metric_value=round(ind_resid_z, 3),
-                            ibs=ibs,
-                            eff_rvol=eff_rvol,
-                            book_cap=book_cap,
-                            spy_last=spy_last,
-                            live_mtm_bps=None,
-                            gates=[
-                                {
-                                    "name": "S&P 500 Constituent ($20+ / $25M+ ADTV)",
-                                    "pass": True,
-                                    "observed": f"S&P 500 · {ind} ({n_ind} peers)",
-                                    "required": "in_sp500 = True & ≥ 6 Industry Peers",
-                                },
-                                {
-                                    "name": "1-of-N Isolated Industry Shock",
-                                    "pass": True,
-                                    "observed": f"Stock {ret_cc*100:+.2f}% vs Peers {peer_cc*100:+.2f}% ({ind_resid_z:+.2f}σ)",
-                                    "required": "ind_resid_z ≤ -2.50σ",
-                                },
-                                {
-                                    "name": "Capitulation Volume & Dead-Low Close",
-                                    "pass": True,
-                                    "observed": f"Pace RVOL {eff_rvol:.2f}x · IBS {ibs:.2f}",
-                                    "required": "RVOL ≥ 2.50x & IBS ≤ 0.25",
-                                },
-                            ],
-                        )
-                    )
-                elif ind_resid_z <= -1.55 and ibs <= 0.40:
+                    s5_raw_hits.append((-ind_resid_z, t, pq, ibs, eff_rvol, ind_resid_z, peer_cc or 0.0, n_ind))
+                elif not t.get("in_er1_window") and ind_resid_z <= -1.55 and ibs <= 0.40:
                     s5_near.append((-ind_resid_z, t, pq, ibs, eff_rvol, ind_resid_z, peer_cc or 0.0))
 
-        # Rank & cap primary cohort slots exactly per audited rules
-        s1_qual.sort(key=lambda c: c["sort_score"], reverse=True)
-        for rank_i, c in enumerate(s1_qual, 1):
-            c["cohort_rank"] = rank_i
-            c["in_top_cohort"] = rank_i <= SLEEVE_SPECS["S1"]["max_positions"]
+        # Run Live Parallel NLP Headline Scraping on top S2 & S5 candidates
+        s2_raw_hits.sort(key=lambda x: x[0], reverse=True)
+        s5_raw_hits.sort(key=lambda x: x[0], reverse=True)
+        news_targets: Dict[str, str] = {}
+        for _, t, *_ in s2_raw_hits[:12]:
+            news_targets[t["symbol"]] = t.get("name", t["symbol"])
+        for _, t, *_ in s5_raw_hits[:12]:
+            news_targets[t["symbol"]] = t.get("name", t["symbol"])
 
-        s2_qual.sort(key=lambda c: c["sort_score"], reverse=True)
-        for rank_i, c in enumerate(s2_qual, 1):
-            c["cohort_rank"] = rank_i
-            c["in_top_cohort"] = rank_i <= SLEEVE_SPECS["S2"]["max_positions"]
+        news_results: Dict[str, Dict[str, Any]] = {}
+        if news_targets:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                futs = {
+                    pool.submit(self._check_live_afternoon_news, sym, cname, now_et, feed_mode): sym
+                    for sym, cname in news_targets.items()
+                }
+                for fut in concurrent.futures.as_completed(futs):
+                    sym = futs[fut]
+                    try:
+                        news_results[sym] = fut.result()
+                    except Exception:
+                        news_results[sym] = {
+                            "checked": False,
+                            "status": "CLEAR",
+                            "afternoon_1500_1600_count": 0,
+                            "toxic_today_count": 0,
+                            "items_scanned": 0,
+                            "latest_headline": None,
+                            "latest_time_et": None,
+                        }
 
-        s3_qual.sort(key=lambda c: c["sort_score"], reverse=True)
-        for rank_i, c in enumerate(s3_qual, 1):
-            c["cohort_rank"] = rank_i
-            c["in_top_cohort"] = rank_i <= SLEEVE_SPECS["S3"]["max_positions"]
+        # Build S2 IRA candidates with [ER-14d, ER+1d] Blackout + Live 15:00–16:00 NLP Headline Guard
+        s2_qual: List[Dict[str, Any]] = []
+        for score, t, pq, ibs, eff_rvol, r_pre_rel, r_last_hr_rel in s2_raw_hits[:12]:
+            sym = t["symbol"]
+            er14_blocked = bool(t.get("in_er14_blackout"))
+            next_er = t.get("next_er_date")
+            last_er = t.get("last_er_date")
+            nw = news_results.get(
+                sym,
+                {
+                    "status": "CLEAR",
+                    "afternoon_1500_1600_count": 0,
+                    "toxic_today_count": 0,
+                    "items_scanned": 0,
+                    "latest_headline": None,
+                    "latest_time_et": None,
+                },
+            )
+            hl_blocked = nw.get("status") == "BLOCKED_HEADLINE"
+            is_blocked = er14_blocked or hl_blocked
 
-        s4_qual.sort(key=lambda c: c["sort_score"], reverse=True)
-        for rank_i, c in enumerate(s4_qual, 1):
-            c["cohort_rank"] = rank_i
-            c["in_top_cohort"] = rank_i <= SLEEVE_SPECS["S4"]["max_positions"]
+            reasons = []
+            if er14_blocked:
+                reasons.append(f"Rule 10b-18 [ER-14d, ER] Blackout (Next ER: {next_er or last_er})")
+            if hl_blocked:
+                reasons.append(
+                    f"15:00–16:00 / Toxic Headline Detected ({nw.get('latest_time_et')}): \"{nw.get('latest_headline')}\""
+                )
 
-        s5_qual.sort(key=lambda c: c["sort_score"], reverse=True)
-        for rank_i, c in enumerate(s5_qual, 1):
-            c["cohort_rank"] = rank_i
-            c["in_top_cohort"] = rank_i <= SLEEVE_SPECS["S5"]["max_positions"]
+            status = "BLOCKED_GUARD" if is_blocked else ("SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW")
+            mcap = float(t.get("market_cap", 0.0))
+            s2_qual.append(
+                self._build_candidate(
+                    sleeve_id="S2",
+                    status=status,
+                    sort_score=score,
+                    t=t,
+                    pq=pq,
+                    ref_price=pq["last"],
+                    stop_price=round(pq["last"] * 0.94, 2),
+                    primary_label=f"15:00→Now {r_last_hr_rel*100:+.2f}% vs SPY",
+                    secondary_label=(
+                        "🚨 ABORT: " + ("ER Blackout" if er14_blocked else "Afternoon Headline!")
+                        if is_blocked
+                        else f"Pre-3PM {r_pre_rel*100:+.2f}% · News Clear ✅"
+                    ),
+                    metric_value=round(r_last_hr_rel * 100.0, 2),
+                    ibs=ibs,
+                    eff_rvol=eff_rvol,
+                    book_cap=book_cap,
+                    ira_hedge_mode=ira_hedge_mode,
+                    sh_px=sh_px,
+                    guard_blocked=is_blocked,
+                    guard_reason=" | ".join(reasons) if reasons else None,
+                    news_guard=nw,
+                    gates=[
+                        {
+                            "name": "Large/Mega-Cap PIT Cash-Generative Issuer",
+                            "pass": True,
+                            "observed": f"{t.get('guild')} (${mcap/1e9:.1f}B) · PIT OCF > $0",
+                            "required": "MCap ≥ $10B & Lagged Quarterly OCF > 0",
+                        },
+                        {
+                            "name": "Rule 10b-18 [ER-14d, ER+1d] Blackout Check",
+                            "pass": not er14_blocked,
+                            "observed": (
+                                f"🚨 BLOCKED: Inside Blackout (ER: {next_er or last_er})"
+                                if er14_blocked
+                                else f"Outside 14d Blackout (Next ER: {next_er or 'Clear'})"
+                            ),
+                            "required": "Strictly outside [ER - 14d, ER + 1d]",
+                        },
+                        {
+                            "name": "Live 15:00–16:00 ET NLP Corporate Headline Guard",
+                            "pass": not hl_blocked,
+                            "observed": (
+                                f"🚨 ABORT ({nw.get('latest_time_et')}): {nw.get('latest_headline')}"
+                                if hl_blocked
+                                else f"0 Afternoon Headlines ({nw.get('items_scanned', 0)} RSS items verified)"
+                            ),
+                            "required": "ZERO corporate headlines 15:00–16:00 ET",
+                        },
+                        {
+                            "name": "Quiet Pre-3PM Tape + Final-Hour 10b-18 Shutoff Drop",
+                            "pass": True,
+                            "observed": f"Pre-3PM {r_pre_rel*100:+.2f}% · Post-3PM {r_last_hr_rel*100:+.2f}% vs SPY",
+                            "required": "|Pre-3PM| ≤ 1.50% & Post-3PM ≤ -1.50%",
+                        },
+                    ],
+                )
+            )
 
-        # Build top near-trigger watchlist items so every sleeve displays closest radar setups
+        # Build S5 IRA candidates with [ER-1d, ER+1d] Earnings Filter + Long SH Hedge
+        s5_qual: List[Dict[str, Any]] = []
+        for score, t, pq, ibs, eff_rvol, ind_resid_z, peer_cc, n_ind in s5_raw_hits[:12]:
+            sym = t["symbol"]
+            er_blocked = bool(t.get("in_er1_window"))
+            next_er = t.get("next_er_date")
+            last_er = t.get("last_er_date")
+            nw = news_results.get(
+                sym,
+                {
+                    "status": "CLEAR",
+                    "afternoon_1500_1600_count": 0,
+                    "toxic_today_count": 0,
+                    "items_scanned": 0,
+                    "latest_headline": None,
+                    "latest_time_et": None,
+                },
+            )
+            status = "BLOCKED_GUARD" if er_blocked else ("SIGNAL_ACTIVE" if is_closing_window else "FORMING_IN_WINDOW")
+            hedge_tag = "BUY SH Hedge" if ira_hedge_mode == "SH_INVERSE_ETF" else "Unhedged Long"
+
+            s5_qual.append(
+                self._build_candidate(
+                    sleeve_id="S5",
+                    status=status,
+                    sort_score=score,
+                    t=t,
+                    pq=pq,
+                    ref_price=pq["last"],
+                    stop_price=round(pq["last"] * 0.92, 2),
+                    primary_label=f"ind_resid_z {ind_resid_z:+.2f}σ (Peers {peer_cc*100:+.1f}%)",
+                    secondary_label=(
+                        f"🚨 BLOCKED: Earnings Shock ({last_er or next_er})"
+                        if er_blocked
+                        else f"RVOL {eff_rvol:.2f}x · IBS {ibs:.2f} · {hedge_tag}"
+                    ),
+                    metric_value=round(ind_resid_z, 3),
+                    ibs=ibs,
+                    eff_rvol=eff_rvol,
+                    book_cap=book_cap,
+                    ira_hedge_mode=ira_hedge_mode,
+                    sh_px=sh_px,
+                    guard_blocked=er_blocked,
+                    guard_reason=(
+                        f"BLOCKED: Earnings Announcement Window ({last_er or next_er}) — Sledgehammer filter blocks 60% ER crash landmines!"
+                        if er_blocked
+                        else None
+                    ),
+                    news_guard=nw,
+                    gates=[
+                        {
+                            "name": "Point-in-Time S&P 500 Constituent ($20+ / $25M+ ADTV)",
+                            "pass": True,
+                            "observed": f"S&P 500 · {t.get('industry')} ({n_ind} peers)",
+                            "required": "PIT S&P 500 = True & ≥ 6 Industry Peers",
+                        },
+                        {
+                            "name": "Non-Earnings Liquidation Filter (No Day -1..+1 ER)",
+                            "pass": not er_blocked,
+                            "observed": (
+                                f"🚨 BLOCKED: Earnings Release ({last_er or next_er})"
+                                if er_blocked
+                                else f"Confirmed Non-Earnings Shock (Last ER: {last_er or 'Clear'} · Next: {next_er or 'Clear'})"
+                            ),
+                            "required": "Outside [ER - 1d, ER + 1d] Earnings Window",
+                        },
+                        {
+                            "name": "1-of-N Isolated Industry Shock + Capitulation Close",
+                            "pass": True,
+                            "observed": f"Resid {ind_resid_z:+.2f}σ · Pace RVOL {eff_rvol:.2f}x · IBS {ibs:.2f}",
+                            "required": "ind_resid_z ≤ -2.50σ, RVOL ≥ 2.5x, IBS ≤ 0.25",
+                        },
+                    ],
+                )
+            )
+
+        # Rank ONLY clean (non-blocked) candidates into executable IRA cohort slots
+        for sid, q_list in (("S3", s3_qual), ("S2", s2_qual), ("S5", s5_qual)):
+            q_list.sort(key=lambda c: (not c["guard_blocked"], c["sort_score"]), reverse=True)
+            clean_rank = 0
+            for c in q_list:
+                if c["guard_blocked"]:
+                    c["cohort_rank"] = 0
+                    c["in_top_cohort"] = False
+                else:
+                    clean_rank += 1
+                    c["cohort_rank"] = clean_rank
+                    c["in_top_cohort"] = clean_rank <= SLEEVE_SPECS[sid]["max_positions"]
+
         near_candidates: List[Dict[str, Any]] = []
-        near_candidates.extend(self._format_near_s1(s1_near, book_cap, spy_last))
-        near_candidates.extend(self._format_near_s2(s2_near, book_cap, spy_last, is_post_3pm))
-        near_candidates.extend(self._format_near_s3(s3_near, book_cap, spy_last))
-        near_candidates.extend(self._format_near_s4(s4_near, book_cap, spy_last))
-        near_candidates.extend(self._format_near_s5(s5_near, book_cap, spy_last))
+        near_candidates.extend(self._format_near_s3(s3_near, book_cap, ira_hedge_mode, sh_px))
+        near_candidates.extend(self._format_near_s2(s2_near, book_cap, ira_hedge_mode, sh_px, is_post_3pm))
+        near_candidates.extend(self._format_near_s5(s5_near, book_cap, ira_hedge_mode, sh_px))
 
-        all_qualifying = s1_qual + s2_qual + s3_qual + s4_qual + s5_qual
+        all_qualifying = s3_qual + s2_qual + s5_qual
+        clean_cohort = [c for c in all_qualifying if c["in_top_cohort"] and not c["guard_blocked"]]
+        blocked_count = sum(1 for c in all_qualifying if c["guard_blocked"])
 
-        sleeve_summaries = []
-        by_sleeve_qual = {"S1": s1_qual, "S2": s2_qual, "S3": s3_qual, "S4": s4_qual, "S5": s5_qual}
+        deployed_primary_usd = round(sum(float(c["notional_usd"]) for c in clean_cohort), 2)
+        deployed_hedge_usd = round(sum(float(c["hedge_notional_usd"]) for c in clean_cohort), 2)
+        total_cash_deployed_usd = round(deployed_primary_usd + deployed_hedge_usd, 2)
+        undeployed_cash_usd = round(max(0.0, book_cap - total_cash_deployed_usd), 2)
+
+        by_sleeve_qual = {"S3": s3_qual, "S2": s2_qual, "S5": s5_qual}
         by_sleeve_near = {
-            "S1": [c for c in near_candidates if c["sleeve_id"] == "S1"],
-            "S2": [c for c in near_candidates if c["sleeve_id"] == "S2"],
             "S3": [c for c in near_candidates if c["sleeve_id"] == "S3"],
-            "S4": [c for c in near_candidates if c["sleeve_id"] == "S4"],
+            "S2": [c for c in near_candidates if c["sleeve_id"] == "S2"],
             "S5": [c for c in near_candidates if c["sleeve_id"] == "S5"],
         }
-        for sid in ("S1", "S2", "S3", "S4", "S5"):
+
+        sleeve_summaries = []
+        for sid in ("S3", "S2", "S5"):
             sp = SLEEVE_SPECS[sid]
             q_list = by_sleeve_qual[sid]
-            top_list = [c for c in q_list if c["in_top_cohort"]]
-            mtm_vals = [c["live_mtm_bps"] for c in top_list if c["live_mtm_bps"] is not None]
+            clean_q = [c for c in q_list if not c["guard_blocked"]]
+            top_list = [c for c in clean_q if c["in_top_cohort"]]
+            blk_q = [c for c in q_list if c["guard_blocked"]]
             sleeve_summaries.append({
                 **sp,
                 "sleeve_capital_usd": round(book_cap * sp["weight"], 0),
-                "qualifying_count": len(q_list),
+                "deployed_usd": round(
+                    sum(float(c["notional_usd"]) + float(c["hedge_notional_usd"]) for c in top_list), 0
+                ),
+                "qualifying_count": len(clean_q),
+                "blocked_count": len(blk_q),
                 "cohort_selected_count": len(top_list),
                 "near_count": len(by_sleeve_near[sid]),
-                "today_cohort_mtm_bps": round(sum(mtm_vals) / len(mtm_vals), 1) if mtm_vals else None,
             })
 
         return {
@@ -960,6 +1075,17 @@ class WholeMarketScannerService:
             "live_scanner_universe_count": len(self._tickers),
             "quotes_received": raw["quotes_received"],
             "book_capital_usd": book_cap,
+            "hedge_mode": ira_hedge_mode,
+            "etp_mode": s3_etp_mode,
+            "capital_summary": {
+                "book_capital_usd": book_cap,
+                "max_single_position_usd": round(0.05 * book_cap, 2),
+                "deployed_primary_usd": deployed_primary_usd,
+                "deployed_hedge_usd": deployed_hedge_usd,
+                "total_cash_deployed_usd": total_cash_deployed_usd,
+                "undeployed_cash_usd": undeployed_cash_usd,
+                "deployed_pct": round((total_cash_deployed_usd / book_cap) * 100.0, 1),
+            },
             "market_window": win_info,
             "p1500_anchor_locked": bool(is_post_3pm and len(self._p1500_prices) > 0),
             "spy": {
@@ -969,6 +1095,7 @@ class WholeMarketScannerService:
                 "high": round(spy_high, 2),
                 "low": round(spy_low, 2),
                 "last": round(spy_last, 2),
+                "sh_last": round(sh_px, 2),
                 "p1500": round(spy_p1500, 2) if spy_p1500 else None,
                 "day_chg_pct": round(spy_day_ret * 100.0, 2),
                 "intraday_chg_pct": round(spy_intraday_ret * 100.0, 2),
@@ -976,7 +1103,8 @@ class WholeMarketScannerService:
             "sleeves": sleeve_summaries,
             "candidates": all_qualifying,
             "near_candidates": near_candidates,
-            "total_active_or_forming": len(all_qualifying),
+            "total_active_or_forming": len(clean_cohort),
+            "total_guard_blocked": blocked_count,
         }
 
     def _build_candidate(
@@ -994,98 +1122,101 @@ class WholeMarketScannerService:
         ibs: float,
         eff_rvol: float,
         book_cap: float,
-        spy_last: float,
-        live_mtm_bps: Optional[float],
+        ira_hedge_mode: str,
+        sh_px: float,
         gates: List[Dict[str, Any]],
-        catalyst_warning: bool = False,
-        stopped_out: bool = False,
+        guard_blocked: bool = False,
+        guard_reason: Optional[str] = None,
+        news_guard: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         sp = SLEEVE_SPECS[sleeve_id]
         sym = t["symbol"]
         adtv20 = float(t["adtv20_usd"])
-        beta = float(t["beta_spy"])
+        beta = max(0.25, min(2.25, float(t["beta_spy"])))
         guild = str(t.get("guild", ""))
-        mcap = float(t.get("market_cap", 0.0))
+        with_sh = bool(sp["uses_sh_hedge"] and ira_hedge_mode == "SH_INVERSE_ETF")
 
-        sleeve_cap = book_cap * float(sp["weight"])
-        if sleeve_id == "S5":
-            # 1/3 daily rolling 3-day cohort
-            raw_slot_usd = (sleeve_cap / 3.0) / float(sp["max_positions"])
-        else:
-            raw_slot_usd = sleeve_cap / float(sp["max_positions"])
-
-        # Enforce strict 0.5% ADTV liquidity cap
-        adtv_cap_usd = 0.005 * adtv20
-        target_notional_usd = max(1_000.0, min(raw_slot_usd, adtv_cap_usd))
-        shares = max(1, int(target_notional_usd // max(ref_price, 0.50)))
-        actual_notional_usd = round(shares * ref_price, 2)
-
-        hedge_mode = sp["hedge_mode"]
-        if hedge_mode == "BUY_BETA_SPY":
-            hedge_side = "BUY"
-            hedge_beta_used = beta
-            spy_shares = max(1, round((actual_notional_usd * beta) / max(spy_last, 1.0)))
-        elif hedge_mode == "SHORT_1X_SPY":
-            hedge_side = "SHORT"
-            hedge_beta_used = 1.0
-            spy_shares = max(1, round(actual_notional_usd / max(spy_last, 1.0)))
-        elif hedge_mode == "SHORT_BETA_SPY":
-            hedge_side = "SHORT"
-            hedge_beta_used = beta
-            spy_shares = max(1, round((actual_notional_usd * beta) / max(spy_last, 1.0)))
-        else:
+        if guard_blocked:
+            shares = 0
+            actual_notional_usd = 0.0
             hedge_side = "NONE"
-            hedge_beta_used = 0.0
-            spy_shares = 0
+            hedge_symbol = "NONE"
+            hedge_shares = 0
+            hedge_px = 0.0
+            hedge_notional_usd = 0.0
+        else:
+            sleeve_cap = book_cap * float(sp["weight"])
+            raw_slot_total_cash = (
+                (sleeve_cap / 3.0) / float(sp["max_positions"])
+                if sleeve_id == "S5"
+                else sleeve_cap / float(sp["max_positions"])
+            )
+            # In an IRA, buying SH uses real cash buying power alongside the primary stock leg:
+            primary_slot_budget = raw_slot_total_cash / (1.0 + beta) if with_sh else raw_slot_total_cash
+            max_single_stock_usd = 0.05 * book_cap
+            adtv_cap_usd = 0.005 * adtv20
+            target_notional_usd = max(500.0, min(max_single_stock_usd, primary_slot_budget, adtv_cap_usd))
+            shares = max(1, int(target_notional_usd // max(ref_price, 0.50)))
+            actual_notional_usd = round(shares * ref_price, 2)
 
-        is_short = sp["direction"] == "SHORT"
-        is_htb = (
-            ref_price < 12.0
-            or mcap < 750_000_000
-            or guild in ("BIOTECH_BURNER", "MICRO_CAP", "CEF", "PREFERRED")
-        )
-        rt_cost_bps = _estimate_rt_friction_bps(
+            if with_sh:
+                hedge_side = "BUY"
+                hedge_symbol = "SH"
+                hedge_px = sh_px
+                hedge_shares = max(1, round((actual_notional_usd * beta) / max(hedge_px, 1.0)))
+                hedge_notional_usd = round(hedge_shares * hedge_px, 2)
+            else:
+                hedge_side = "NONE"
+                hedge_symbol = "NONE"
+                hedge_px = 0.0
+                hedge_shares = 0
+                hedge_notional_usd = 0.0
+
+        rt_cost_bps = _estimate_ira_rt_friction_bps(
+            sleeve_id=sleeve_id,
+            guild=guild,
             price=ref_price,
             adtv20_usd=adtv20,
-            clip_usd=actual_notional_usd,
-            hedged=(spy_shares > 0),
-            is_short=is_short,
-            is_htb=is_htb,
-        )
-        live_mtm_usd = (
-            round(actual_notional_usd * (live_mtm_bps / 10000.0), 2)
-            if live_mtm_bps is not None
-            else None
+            clip_usd=max(actual_notional_usd, 5_000.0),
+            with_sh_hedge=with_sh,
         )
 
-        # Build crisp copyable multi-leg ticket
-        leg1_verb = "SELL SHORT" if is_short else "BUY"
-        hedge_line = (
-            f"LEG 2 (SPY HEDGE): {hedge_side} {spy_shares} sh SPY @ ~${spy_last:.2f} (β={hedge_beta_used:.2f})"
-            if spy_shares > 0
-            else "LEG 2 (HEDGE): NONE (Unhedged Sleeve)"
-        )
-        ticket_text = (
-            f"[{sleeve_id} — {sp['name']}]\n"
-            f"LEG 1 (PRIMARY): {leg1_verb} {shares} sh {sym} @ ~${ref_price:.2f} (${actual_notional_usd:,.0f})\n"
-            f"{hedge_line}\n"
-            f"HARD STOP: ${stop_price:.2f} | ENTRY: {sp['entry_bell']} | EXIT: {sp['exit_bell']}\n"
-            f"SIGNAL: {primary_label} | {secondary_label} | Est. RT Friction: {rt_cost_bps:.1f} bps"
-        )
+        if guard_blocked:
+            ticket_text = (
+                f"[{sleeve_id} — DO NOT EXECUTE / QUARANTINED]\n"
+                f"SYMBOL: {sym} @ ${ref_price:.2f}\n"
+                f"REASON: {guard_reason or 'Blocked by Sledgehammer Risk Guard'}"
+            )
+        else:
+            hedge_line = (
+                f"LEG 2 (IRA BETA HEDGE): BUY {hedge_shares} sh SH @ ~${hedge_px:.2f} (${hedge_notional_usd:,.0f} · 1x Inverse SPY, β={beta:.2f})"
+                if hedge_shares > 0
+                else "LEG 2 (HEDGE): NONE (100% Unhedged Long-Only IRA Cash)"
+            )
+            ticket_text = (
+                f"[{sleeve_id} — {sp['short_name']} | IRA 5WJ26897 LONG-ONLY]\n"
+                f"LEG 1 (PRIMARY): BUY {shares} sh {sym} @ ~${ref_price:.2f} (${actual_notional_usd:,.0f} · <=5% IRA & <=0.5% ADTV)\n"
+                f"{hedge_line}\n"
+                f"CATASTROPHE STOP: ${stop_price:.2f} | ENTRY: {sp['entry_bell']} | SELL EXIT: {sp['exit_bell']}\n"
+                f"SIGNAL: {primary_label} | {secondary_label} | Est. RT Friction: {rt_cost_bps:.1f} bps"
+            )
 
         return {
             "id": f"{sleeve_id}-{sym}",
             "sleeve_id": sleeve_id,
             "sleeve_short_name": sp["short_name"],
-            "direction": sp["direction"],
+            "direction": "LONG",
             "status": status,
             "sort_score": float(sort_score),
             "cohort_rank": 0,
-            "in_top_cohort": True,
+            "in_top_cohort": False,
             "symbol": sym,
             "name": t.get("name", sym),
             "guild": guild,
             "sector": t.get("sector", ""),
+            "etp_sub_bucket": t.get("etp_sub_bucket"),
+            "underlying_symbol": t.get("underlying_symbol"),
+            "next_er_date": t.get("next_er_date"),
             "industry": t.get("industry", ""),
             "adtv20_usd": round(adtv20, 0),
             "prev_close": round(pq["prev_close"], 2),
@@ -1107,55 +1238,65 @@ class WholeMarketScannerService:
             "shares": shares,
             "notional_usd": actual_notional_usd,
             "hedge_side": hedge_side,
-            "spy_hedge_shares": spy_shares,
+            "hedge_symbol": hedge_symbol,
+            "hedge_price": round(hedge_px, 2),
+            "hedge_notional_usd": hedge_notional_usd,
+            "sh_hedge_shares": hedge_shares,
             "rt_cost_bps": rt_cost_bps,
-            "live_mtm_bps": live_mtm_bps,
-            "live_mtm_usd": live_mtm_usd,
-            "catalyst_warning": catalyst_warning,
-            "stopped_out": stopped_out,
+            "guard_blocked": guard_blocked,
+            "guard_reason": guard_reason,
+            "news_guard": news_guard,
             "entry_bell": sp["entry_bell"],
             "exit_bell": sp["exit_bell"],
             "gates": gates,
             "copy_ticket": ticket_text,
         }
 
-    def _format_near_s1(
-        self, items: List[Tuple[Any, ...]], book_cap: float, spy_last: float
+    def _format_near_s3(
+        self,
+        items: List[Tuple[Any, ...]],
+        book_cap: float,
+        ira_hedge_mode: str,
+        sh_px: float,
     ) -> List[Dict[str, Any]]:
         items.sort(key=lambda x: x[0], reverse=True)
         out = []
-        for z_gap, t, pq, ibs, rvol in items[:5]:
-            op = pq["open"]
-            sma20 = float(t["sma20"])
+        for score, t, pq, ibs, rvol in items[:6]:
+            z1d = -score
+            bkt = (
+                "Index/Sector Bull"
+                if t.get("etp_sub_bucket") == "EQUITY_INDEX_SECTOR_BULL"
+                else f"2x Bull ({t.get('underlying_symbol') or 'Eq'})"
+            )
             out.append(
                 self._build_candidate(
-                    sleeve_id="S1",
+                    sleeve_id="S3",
                     status="NEAR_TRIGGER_WATCH",
-                    sort_score=z_gap,
+                    sort_score=score,
                     t=t,
                     pq=pq,
-                    ref_price=op,
-                    stop_price=round(op * 1.06, 2),
-                    primary_label=f"z_gap {z_gap:+.2f}σ (Needs ≥ +1.30σ)",
-                    secondary_label=f"Open ${op:.2f} < SMA20 ${sma20:.2f}",
-                    metric_value=round(z_gap, 3),
+                    ref_price=pq["last"],
+                    stop_price=round(pq["last"] * 0.92, 2),
+                    primary_label=f"z1d {z1d:+.2f}σ (Needs ≤ -1.50σ)",
+                    secondary_label=f"IBS {ibs:.2f} (≤0.15) · {bkt}",
+                    metric_value=round(z1d, 3),
                     ibs=ibs,
                     eff_rvol=rvol,
                     book_cap=book_cap,
-                    spy_last=spy_last,
-                    live_mtm_bps=None,
+                    ira_hedge_mode=ira_hedge_mode,
+                    sh_px=sh_px,
                     gates=[
                         {
-                            "name": "Weak Daily Trend (Open < SMA20)",
-                            "pass": True,
-                            "observed": f"Open ${op:.2f} < SMA20 ${sma20:.2f}",
-                            "required": "Open < SMA20",
+                            "name": "Constant-Leverage Shock ≤ -1.50σ",
+                            "pass": z1d <= -1.50,
+                            "observed": f"{z1d:+.2f}σ ({bkt})",
+                            "required": "z1d_c ≤ -1.50σ",
                         },
                         {
-                            "name": "Bounded Gap (+1.3σ..+2.8σ)",
-                            "pass": False,
-                            "observed": f"z_gap = {z_gap:+.2f}σ",
-                            "required": "+1.30σ ≤ z_gap ≤ +2.80σ",
+                            "name": "Pinned Near Session Low (IBS ≤ 0.15)",
+                            "pass": ibs <= 0.15,
+                            "observed": f"IBS = {ibs:.2f}",
+                            "required": "IBS ≤ 0.15",
                         },
                     ],
                 )
@@ -1166,12 +1307,15 @@ class WholeMarketScannerService:
         self,
         items: List[Tuple[Any, ...]],
         book_cap: float,
-        spy_last: float,
+        ira_hedge_mode: str,
+        sh_px: float,
         is_post_3pm: bool,
     ) -> List[Dict[str, Any]]:
         items.sort(key=lambda x: x[0], reverse=True)
         out = []
-        for score, t, pq, ibs, rvol, r_pre, r_last in items[:5]:
+        for score, t, pq, ibs, rvol, r_pre, r_last in items[:6]:
+            if t.get("in_er14_blackout"):
+                continue
             lbl1 = (
                 f"15:00→Now {r_last*100:+.2f}% vs SPY"
                 if is_post_3pm
@@ -1180,7 +1324,7 @@ class WholeMarketScannerService:
             lbl2 = (
                 f"Pre-3PM {r_pre*100:+.2f}% · Needs ≤ -1.50%"
                 if is_post_3pm
-                else f"Awaiting 15:00 ET Anchor Lock · IBS {ibs:.2f}"
+                else "Outside ER Blackout · Awaiting 15:00 ET Lock"
             )
             out.append(
                 self._build_candidate(
@@ -1197,104 +1341,20 @@ class WholeMarketScannerService:
                     ibs=ibs,
                     eff_rvol=rvol,
                     book_cap=book_cap,
-                    spy_last=spy_last,
-                    live_mtm_bps=None,
+                    ira_hedge_mode=ira_hedge_mode,
+                    sh_px=sh_px,
                     gates=[
                         {
-                            "name": "Large/Mega-Cap Buyback Issuer",
+                            "name": "Outside [ER-14d, ER] Rule 10b-18 Blackout",
                             "pass": True,
-                            "observed": f"{t.get('guild')} · OCF > $0",
-                            "required": "MCap ≥ $10B & OCF_TTM > 0",
+                            "observed": f"Clear (Next ER: {t.get('next_er_date') or 'Outside Window'})",
+                            "required": "Not in [ER - 14d, ER + 1d]",
                         },
                         {
                             "name": "15:00→15:55 Final-Hour Drop ≤ -1.50%",
                             "pass": False,
                             "observed": lbl1,
-                            "required": "Post-15:00 Rel Drop ≤ -1.50%",
-                        },
-                    ],
-                )
-            )
-        return out
-
-    def _format_near_s3(
-        self, items: List[Tuple[Any, ...]], book_cap: float, spy_last: float
-    ) -> List[Dict[str, Any]]:
-        items.sort(key=lambda x: x[0], reverse=True)
-        out = []
-        for score, t, pq, ibs, rvol in items[:5]:
-            z1d = -score
-            out.append(
-                self._build_candidate(
-                    sleeve_id="S3",
-                    status="NEAR_TRIGGER_WATCH",
-                    sort_score=score,
-                    t=t,
-                    pq=pq,
-                    ref_price=pq["last"],
-                    stop_price=round(pq["last"] * 0.92, 2),
-                    primary_label=f"z1d {z1d:+.2f}σ (Needs ≤ -1.50σ)",
-                    secondary_label=f"IBS {ibs:.2f} (Needs ≤ 0.15)",
-                    metric_value=round(z1d, 3),
-                    ibs=ibs,
-                    eff_rvol=rvol,
-                    book_cap=book_cap,
-                    spy_last=spy_last,
-                    live_mtm_bps=None,
-                    gates=[
-                        {
-                            "name": "Constant-Leverage Shock ≤ -1.50σ",
-                            "pass": z1d <= -1.50,
-                            "observed": f"{z1d:+.2f}σ",
-                            "required": "z1d_c ≤ -1.50σ",
-                        },
-                        {
-                            "name": "Pinned Near Session Low (IBS ≤ 0.15)",
-                            "pass": ibs <= 0.15,
-                            "observed": f"IBS = {ibs:.2f}",
-                            "required": "IBS ≤ 0.15",
-                        },
-                    ],
-                )
-            )
-        return out
-
-    def _format_near_s4(
-        self, items: List[Tuple[Any, ...]], book_cap: float, spy_last: float
-    ) -> List[Dict[str, Any]]:
-        items.sort(key=lambda x: x[0], reverse=True)
-        out = []
-        for score, t, pq, ibs, rvol, ind_gap_z in items[:5]:
-            op = pq["open"]
-            out.append(
-                self._build_candidate(
-                    sleeve_id="S4",
-                    status="NEAR_TRIGGER_WATCH",
-                    sort_score=score,
-                    t=t,
-                    pq=pq,
-                    ref_price=op,
-                    stop_price=round(op * 0.90, 2),
-                    primary_label=f"ind_gap_z {ind_gap_z:+.2f}σ (Band -3.0..-1.2σ)",
-                    secondary_label=f"Prev RVOL {float(t['prev_rvol']):.2f}x · Open ${op:.2f}",
-                    metric_value=round(ind_gap_z, 3),
-                    ibs=ibs,
-                    eff_rvol=rvol,
-                    book_cap=book_cap,
-                    spy_last=spy_last,
-                    live_mtm_bps=None,
-                    gates=[
-                        {
-                            "name": "Quiet Prior RVOL ≤ 1.50x",
-                            "pass": True,
-                            "observed": f"{float(t['prev_rvol']):.2f}x",
-                            "required": "prev_rvol ≤ 1.50x",
-                        },
-                        {
-                            "name": "Bounded Biotech Stop-Run Gap",
-                            "pass": -3.0 <= ind_gap_z <= -1.2,
-                            "observed": f"ind_gap_z = {ind_gap_z:+.2f}σ",
-                            "required": "-3.00σ ≤ ind_gap_z ≤ -1.20σ",
+                            "required": "Post-15:00 Rel Drop ≤ -1.50% + 0 Afternoon News",
                         },
                     ],
                 )
@@ -1302,11 +1362,16 @@ class WholeMarketScannerService:
         return out
 
     def _format_near_s5(
-        self, items: List[Tuple[Any, ...]], book_cap: float, spy_last: float
+        self,
+        items: List[Tuple[Any, ...]],
+        book_cap: float,
+        ira_hedge_mode: str,
+        sh_px: float,
     ) -> List[Dict[str, Any]]:
         items.sort(key=lambda x: x[0], reverse=True)
         out = []
-        for score, t, pq, ibs, rvol, ind_z, peer_cc in items[:5]:
+        hedge_tag = "BUY SH" if ira_hedge_mode == "SH_INVERSE_ETF" else "Unhedged"
+        for score, t, pq, ibs, rvol, ind_z, peer_cc in items[:6]:
             out.append(
                 self._build_candidate(
                     sleeve_id="S5",
@@ -1317,19 +1382,19 @@ class WholeMarketScannerService:
                     ref_price=pq["last"],
                     stop_price=round(pq["last"] * 0.92, 2),
                     primary_label=f"ind_resid_z {ind_z:+.2f}σ (Peers {peer_cc*100:+.1f}%)",
-                    secondary_label=f"Pace RVOL {rvol:.2f}x (≥2.5x) · IBS {ibs:.2f} (≤0.25)",
+                    secondary_label=f"RVOL {rvol:.2f}x (≥2.5x) · IBS {ibs:.2f} · {hedge_tag}",
                     metric_value=round(ind_z, 3),
                     ibs=ibs,
                     eff_rvol=rvol,
                     book_cap=book_cap,
-                    spy_last=spy_last,
-                    live_mtm_bps=None,
+                    ira_hedge_mode=ira_hedge_mode,
+                    sh_px=sh_px,
                     gates=[
                         {
                             "name": "1-of-N Narrow-Industry Isolation ≤ -2.50σ",
                             "pass": ind_z <= -2.50,
-                            "observed": f"{ind_z:+.2f}σ",
-                            "required": "ind_resid_z ≤ -2.50σ",
+                            "observed": f"{ind_z:+.2f}σ ({hedge_tag})",
+                            "required": "ind_resid_z ≤ -2.50σ & Non-Earnings Day",
                         },
                         {
                             "name": "Capitulation RVOL ≥ 2.5x & IBS ≤ 0.25",

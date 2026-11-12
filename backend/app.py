@@ -37,7 +37,6 @@ from backend.models import (
     ManualTradeCreateRequest,
     ReconcileTriggerRequest,
 )
-from backend.nvda_monitor import NvdaSignalMonitorService
 from backend.whole_market_scanner import WholeMarketScannerService
 from backend.worker import ScannerManagementWorker
 
@@ -92,30 +91,26 @@ def create_app(
 ) -> FastAPI:
     db = DashboardDatabase(db_path) if db_path else DashboardDatabase()
     worker = ScannerManagementWorker(db=db)
-    nvda_monitor = NvdaSignalMonitorService(poll_interval_sec=5.0)
     whole_market_scanner = WholeMarketScannerService(poll_interval_sec=25.0)
 
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI):
         if start_background_worker:
             worker.start_background_loop(interval_seconds=15.0)
-            nvda_monitor.start()
             whole_market_scanner.start()
         try:
             yield
         finally:
             whole_market_scanner.stop()
-            nvda_monitor.stop()
             worker.stop_background_loop()
 
     app = FastAPI(
-        title="Flush & Reclaim V5 — Multi-Strategy Quant Workstation",
-        version="5.3.0",
+        title="Flush & Reclaim V5 — IRA Long-Only Quant Workstation",
+        version="5.4.0",
         lifespan=lifespan,
     )
     app.state.db = db
     app.state.worker = worker
-    app.state.nvda_monitor = nvda_monitor
     app.state.whole_market_scanner = whole_market_scanner
 
     app.add_middleware(
@@ -158,26 +153,17 @@ def create_app(
     def get_chart(symbol: str) -> Dict[str, Any]:
         return worker.get_symbol_chart(symbol)
 
-    @app.get("/api/nvda/state")
-    def get_nvda_state() -> JSONResponse:
-        return JSONResponse(
-            nvda_monitor.get_state(lazy_prime=True),
-            headers={"Cache-Control": "no-store"},
-        )
-
-    @app.post("/api/nvda/refresh")
-    def refresh_nvda_state(request: Request) -> JSONResponse:
-        verify_local_mutation_request(request)
-        return JSONResponse(
-            nvda_monitor.poll_now(),
-            headers={"Cache-Control": "no-store"},
-        )
-
     @app.get("/api/whole-market/scan")
-    def get_whole_market_scan(capital: float = 100000.0) -> JSONResponse:
+    def get_whole_market_scan(
+        capital: float = 1000000.0,
+        hedge_mode: str = "SH_INVERSE_ETF",
+        etp_mode: str = "EQUITY_BULL_ER_GUARDED",
+    ) -> JSONResponse:
         return JSONResponse(
             whole_market_scanner.get_scan_payload(
                 book_capital_usd=capital,
+                hedge_mode=hedge_mode,
+                etp_mode=etp_mode,
                 force_refresh=False,
             ),
             headers={"Cache-Control": "no-store"},
@@ -193,16 +179,25 @@ def create_app(
     @app.post("/api/whole-market/refresh")
     async def refresh_whole_market_scan(request: Request) -> JSONResponse:
         verify_local_mutation_request(request)
-        capital = 100000.0
+        capital = 1000000.0
+        hedge_mode = "SH_INVERSE_ETF"
+        etp_mode = "EQUITY_BULL_ER_GUARDED"
         try:
             body = await request.json()
-            if isinstance(body, dict) and body.get("book_capital_usd") is not None:
-                capital = float(body["book_capital_usd"])
+            if isinstance(body, dict):
+                if body.get("book_capital_usd") is not None:
+                    capital = float(body["book_capital_usd"])
+                if body.get("hedge_mode"):
+                    hedge_mode = str(body["hedge_mode"])
+                if body.get("etp_mode"):
+                    etp_mode = str(body["etp_mode"])
         except Exception:
             pass
         return JSONResponse(
             whole_market_scanner.get_scan_payload(
                 book_capital_usd=capital,
+                hedge_mode=hedge_mode,
+                etp_mode=etp_mode,
                 force_refresh=True,
             ),
             headers={"Cache-Control": "no-store"},
@@ -465,7 +460,6 @@ def create_app(
             "api/settings",
             "api/handoff/open",
             "api/positions/manual",
-            "api/nvda/refresh",
             "api/whole-market/refresh",
         }
         norm_path = full_path.strip("/")
